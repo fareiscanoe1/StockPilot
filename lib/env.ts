@@ -27,6 +27,10 @@ const envSchema = z.object({
   FINNHUB_API_KEY: z.string().optional(),
   /** Web search layer for latest context (optional) */
   TAVILY_API_KEY: z.string().optional(),
+  /** Required for AI trade reasoning — never used as market data */
+  OPENAI_API_KEY: z.string().optional(),
+  /** Chat model for structured trade JSON (default: gpt-4o-mini) */
+  OPENAI_REASONING_MODEL: z.string().optional(),
   CRON_SECRET: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   SMTP_HOST: z.string().optional(),

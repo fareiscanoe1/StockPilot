@@ -38,6 +38,14 @@ export default async function SettingsPage() {
           Tavily key present:{" "}
           <code className="text-xs">{Boolean(process.env.TAVILY_API_KEY)}</code>
         </p>
+        <p>
+          OpenAI key present (reasoning layer):{" "}
+          <code className="text-xs">{Boolean(process.env.OPENAI_API_KEY)}</code>
+        </p>
+        <p className="text-xs">
+          Model:{" "}
+          <code>{process.env.OPENAI_REASONING_MODEL?.trim() || "gpt-4o-mini (default)"}</code>
+        </p>
         <p className="border-t border-[var(--border)] pt-3 text-xs">
           Tavily is optional open-web research only — labeled separately from Finnhub news and
           never substitutes for quotes, earnings, fundamentals, or options chains.

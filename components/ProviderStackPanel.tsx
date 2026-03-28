@@ -11,6 +11,7 @@ export function ProviderStackPanel({
     stack.quotes === "unavailable" ||
     stack.candles === "unavailable" ||
     stack.news === "unavailable";
+  const missingReasoning = stack.reasoning === "unavailable";
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-black/25 px-3 py-2 text-xs text-[var(--muted)]">
@@ -41,6 +42,13 @@ export function ProviderStackPanel({
             (supplemental context only — not market data)
           </span>
         </div>
+        <div className="sm:col-span-2">
+          AI reasoning (OpenAI):{" "}
+          <span className="text-foreground">{stack.reasoning}</span>
+          <span className="ml-1 text-[10px] opacity-80">
+            (structured JSON only — uses vendor snapshot below, never as quote source)
+          </span>
+        </div>
       </div>
       {stack.warnings.length > 0 && (
         <ul className="mt-2 list-inside list-disc space-y-1 text-amber-200/90">
@@ -49,11 +57,21 @@ export function ProviderStackPanel({
           ))}
         </ul>
       )}
-      {missingCore && (
+      {(missingCore || missingReasoning) && (
         <p className="mt-2 border-t border-[var(--border)] pt-2 text-amber-200">
-          This strategy is unavailable because required real data is missing. Configure API keys
-          in <code className="text-foreground">.env.local</code> — the app will not fabricate
-          quotes or news.
+          {missingCore && (
+            <>
+              Market data providers are incomplete — configure Polygon/Finnhub in{" "}
+              <code className="text-foreground">.env.local</code>.
+            </>
+          )}
+          {missingCore && missingReasoning && " "}
+          {missingReasoning && (
+            <>
+              Add <code className="text-foreground">OPENAI_API_KEY</code> for structured trade
+              reasoning (OpenAI does not supply prices or fundamentals).
+            </>
+          )}
         </p>
       )}
     </div>

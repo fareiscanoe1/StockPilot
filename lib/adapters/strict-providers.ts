@@ -18,6 +18,8 @@ export type EarningsSource = "FINNHUB" | null;
 export type NewsSource = "FINNHUB" | null;
 export type WebResearchSource = "TAVILY" | "NONE_SUPPLEMENTAL_SKIPPED";
 
+export type ReasoningLayerSource = "OPENAI" | null;
+
 export interface StrictProviderStack {
   quotesSource: QuotesSource;
   candlesSource: QuotesSource;
@@ -26,6 +28,8 @@ export interface StrictProviderStack {
   earningsSource: EarningsSource;
   newsSource: NewsSource;
   webResearchSource: WebResearchSource;
+  /** Interpretation only — not a market-data vendor */
+  reasoningLayer: ReasoningLayerSource;
   warnings: string[];
 }
 
@@ -108,6 +112,13 @@ export function resolveStrictProviders(): ResolvedStrictProviders {
     warnings.push("Fundamentals require FINNHUB_API_KEY.");
   }
 
+  const reasoningLayer: ReasoningLayerSource = env.OPENAI_API_KEY ? "OPENAI" : null;
+  if (!reasoningLayer) {
+    warnings.push(
+      "No OPENAI_API_KEY — structured AI reasoning is unavailable; symbols pass data gates but receive NO_TRADE.",
+    );
+  }
+
   return {
     market,
     options,
@@ -122,6 +133,7 @@ export function resolveStrictProviders(): ResolvedStrictProviders {
       earningsSource,
       newsSource,
       webResearchSource,
+      reasoningLayer,
       warnings,
     },
   };

@@ -51,6 +51,7 @@ export default async function ScannerPage() {
                     <div>n: {p?.news ?? "—"}</div>
                     <div>o: {p?.optionsChain ?? "—"}</div>
                     <div>web: {p?.webResearch ?? "—"}</div>
+                    <div>AI: {p?.reasoning ?? "—"}</div>
                   </td>
                 </tr>
               );

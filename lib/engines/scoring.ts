@@ -1,3 +1,7 @@
+/**
+ * Heuristic multi-factor scoring (legacy reference). Production scans use OpenAI structured
+ * reasoning in `strategy-engine.ts` + `openai-reasoning.ts` instead of `scoreOpportunity`.
+ */
 import type { StrategyMode } from "@prisma/client";
 
 export interface FactorInputs {

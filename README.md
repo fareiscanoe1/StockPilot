@@ -44,7 +44,7 @@ earnings-pilot-ai/
 - Full **Next.js 15** app shell (landing, auth, onboarding, dashboard, scanner, earnings, options, portfolio, positions, history, AI rationale, analytics, settings, notifications, strategy, watchlist).
 - **PostgreSQL** schema (Prisma) for users, virtual accounts / sub-portfolios, watchlists, holdings, simulated orders & fills, option contracts, alerts, notifications, recommendation logs, earnings events, news items, backtests, audit logs.
 - **Adapter interfaces** for market, options, earnings, news — **STRICT real-data mode only** (`DATA_PROVIDER=STRICT`): **Polygon** (preferred) or **Finnhub** for quotes/candles, **Polygon-only** options chains, **Finnhub** earnings + news, optional **Tavily** open-web context (`lib/adapters/*`, `lib/adapters/strict-providers.ts`, `provider-factory.ts`).
-- **Engines:** `StrictStrategyEngine`, `RiskEngine`, `PortfolioSimulator`, `AlertEngine`, `TradeJournal`, `BacktestEngine`, `ScanRunner` (multi-factor scoring in `lib/engines/scoring.ts`).
+- **Engines:** `StrictStrategyEngine` (OpenAI structured JSON reasoning), `RiskEngine`, `PortfolioSimulator`, `AlertEngine`, `TradeJournal`, `BacktestEngine`, `ScanRunner`; heuristic reference in `lib/engines/scoring.ts`.
 - **Notifications:** in-app + SSE (`/api/stream/alerts`), email via SMTP (nodemailer), Telegram bot API, Discord webhooks, optional SMS via configurable webhook URL (`lib/adapters/notification-adapter.ts`).
 - **API routes** for dashboard data, scanner, cron-triggered autonomous scan, backtests, prefs, etc.
 - **TradingView Lightweight Charts™**-style component (`components/PriceChart.tsx`).
@@ -67,6 +67,7 @@ With **`DATA_PROVIDER=STRICT`** (required), the desk never uses mock or syntheti
 - **Finnhub** backs **real** stock endpoints used here: quotes, bid/ask, candles, **earnings calendar**, **news**, and **fundamentals** (metric endpoint) where applicable.
 - **Tavily** is **optional** and **supplemental** — open-web context only, not market data.
 - **`RecommendationLog`** stores **`TRADE` / `NO_TRADE`**, **`reasonCode`**, **`sourcesUsed`**, **`sourcesMissing`**, and payloads with **exact provenance** (quotes, candles, earnings, news, options, web research).
+- **OpenAI** (`OPENAI_API_KEY`) is the **reasoning and decision layer only**: the engine sends a **normalized `provider_snapshot`** (Polygon/Finnhub/Tavily-labeled fields) and requires a **strict JSON schema** response: `decision`, `confidence`, `risk_score`, `thesis`, `invalidation`, `rationale`, `no_trade_reason`. OpenAI is **never** consulted for quotes, candles, earnings, news, fundamentals, or options — those remain vendor-only. Without `OPENAI_API_KEY`, symbols that pass data gates still log **`NO_TRADE`** with `OPENAI_REASONING_UNAVAILABLE`.
 - The UI shows a **REAL DATA ONLY** badge, the **active provider stack** on scanner and dashboard (alerts) areas, and per-row **provenance** on scanner candidates where applicable.
 
 ### 4. What is still heuristic (not vendor data)
@@ -97,6 +98,7 @@ With **`DATA_PROVIDER=STRICT`** (required), the desk never uses mock or syntheti
 | NotificationAdapter | `lib/adapters/notification-adapter.ts` |
 | BrokerReadOnlyAdapter (placeholder) | `lib/adapters/broker-readonly-adapter.ts` |
 | StrictStrategyEngine | `lib/engines/strategy-engine.ts` |
+| OpenAI reasoning (structured JSON) | `lib/engines/openai-reasoning.ts` |
 | RiskEngine | `lib/engines/risk-engine.ts` |
 | PortfolioSimulator | `lib/engines/portfolio-simulator.ts` |
 | AlertEngine | `lib/engines/alert-engine.ts` |

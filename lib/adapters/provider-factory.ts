@@ -24,6 +24,8 @@ export interface DataStackSummary {
   earnings: string;
   news: string;
   webResearch: string;
+  /** Structured JSON trade decisions from OpenAI — not market data */
+  reasoning: string;
   warnings: string[];
 }
 
@@ -42,6 +44,7 @@ export function getDataStackSummary(stack?: StrictProviderStack): DataStackSumma
     earnings: label(s.earningsSource),
     news: label(s.newsSource),
     webResearch: s.webResearchSource,
+    reasoning: s.reasoningLayer ?? "unavailable",
     warnings: s.warnings,
   };
 }

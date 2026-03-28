@@ -1,8 +1,12 @@
 import type { AssetType, StrategyMode, SubPortfolioType } from "@prisma/client";
 import type { ResolvedStrictProviders } from "@/lib/adapters/strict-providers";
 import type { OptionChain } from "@/lib/adapters/types";
+import { env } from "@/lib/env";
 import { RiskEngine } from "./risk-engine";
-import { scoreOpportunity, type FactorInputs } from "./scoring";
+import {
+  buildProviderSnapshot,
+  runOpenAIReasoning,
+} from "./openai-reasoning";
 
 export const REASON = {
   MISSING_MARKET_ADAPTER: "MISSING_MARKET_ADAPTER",
@@ -18,6 +22,9 @@ export const REASON = {
   EARNINGS_DATE_UNAVAILABLE_FOR_SYMBOL: "EARNINGS_DATE_UNAVAILABLE_FOR_SYMBOL",
   SCORE_BELOW_THRESHOLD: "SCORE_BELOW_THRESHOLD",
   POSITION_SIZE_RULE_FAIL: "POSITION_SIZE_RULE_FAIL",
+  OPENAI_REASONING_UNAVAILABLE: "OPENAI_REASONING_UNAVAILABLE",
+  OPENAI_REASONING_FAILED: "OPENAI_REASONING_FAILED",
+  OPENAI_DECISION_NO_TRADE: "OPENAI_DECISION_NO_TRADE",
 } as const;
 
 export type ReasonCode = (typeof REASON)[keyof typeof REASON];
@@ -315,10 +322,6 @@ export class StrictStrategyEngine {
       else sourcesMissing.push("NEWS_ADAPTER");
       if (news && articles.length === 0) sourcesMissing.push("NEWS_HEADLINES_EMPTY");
 
-      const sent = newsSkipped
-        ? 0
-        : articles.reduce((a, n) => a + (n.sentiment ?? 0), 0) / articles.length;
-
       const web = await research.gatherSymbolContext(symbol);
       sourcesUsed.webResearchLayer = web.source;
       provenance.webResearch = web.source;
@@ -335,52 +338,80 @@ export class StrictStrategyEngine {
 
       const isEarn = earningsSet.has(symbol.toUpperCase());
 
-      const optQuality =
-        this.mode === "OPTIONS_MOMENTUM" && bestOpt
-          ? Math.min(
-              1,
-              ((bestOpt.openInterest ?? 0) / 5000) * 0.5 +
-                (1 - Math.min(1, spreadPct / 5)) * 0.5,
-            )
-          : 0.45;
-
-      const factors: FactorInputs = {
-        technicalTrend,
-        momentum: quote.volume > 2e6 ? 0.62 : 0.5,
-        earningsEdge:
-          this.mode === "EARNINGS_HUNTER" && isEarn
-            ? 0.72
-            : this.mode === "EARNINGS_HUNTER"
-              ? 0.35
-              : isEarn
-                ? 0.55
-                : 0.45,
-        valuationZ: fundamentals?.pe
-          ? Math.max(0, 1 - Math.min(1, fundamentals.pe / 40))
-          : 0.5,
-        balanceSheet: fundamentals?.debtToEquity
-          ? Math.max(0, 1 - fundamentals.debtToEquity)
-          : 0.5,
-        newsSentiment: sent,
-        newsSkipped,
-        optionsQuality: optQuality,
-        optionsSkipped: this.mode !== "OPTIONS_MOMENTUM",
-        portfolioFit: 0.6,
-        macroRisk:
-          isEarn && !this.risk.params().allowHighEventRisk ? 0.55 : 0.35,
-      };
-
-      const scored = scoreOpportunity(this.mode, factors);
-      if (!scored.trade) {
+      if (!env.OPENAI_API_KEY) {
         decisions.push({
           timestamp: new Date().toISOString(),
           ticker: symbol,
           strategy: strategyLabel,
           decision: "NO_TRADE",
-          reasonCode: REASON.SCORE_BELOW_THRESHOLD,
+          reasonCode: REASON.OPENAI_REASONING_UNAVAILABLE,
           sourcesUsed,
+          sourcesMissing: [...sourcesMissing, "OPENAI_API_KEY"],
+          provenance,
+        });
+        continue;
+      }
+
+      const model = env.OPENAI_REASONING_MODEL?.trim() || "gpt-4o-mini";
+      const snapshot = buildProviderSnapshot({
+        symbol,
+        mode: this.mode,
+        subPortfolio,
+        portfolioValue,
+        provenance: { ...provenance },
+        quote,
+        spreadPct,
+        candles,
+        fundamentals,
+        earningsInWindow: isEarn,
+        earningsCalendarVendor: earnings ? "FINNHUB" : null,
+        articles,
+        newsSkipped,
+        newsAdapterPresent: Boolean(news),
+        web,
+        bestOpt,
+        optionsMode: this.mode === "OPTIONS_MOMENTUM",
+        risk: this.risk.params(),
+        technicalTrend,
+        liquidityCheckPassed: true,
+      });
+
+      const ai = await runOpenAIReasoning(env.OPENAI_API_KEY, model, snapshot);
+      if (!ai.ok) {
+        decisions.push({
+          timestamp: new Date().toISOString(),
+          ticker: symbol,
+          strategy: strategyLabel,
+          decision: "NO_TRADE",
+          reasonCode: REASON.OPENAI_REASONING_FAILED,
+          sourcesUsed: {
+            ...sourcesUsed,
+            reasoningLayer: "OPENAI",
+            openaiModel: model,
+            openaiError: ai.error.slice(0, 500),
+          },
           sourcesMissing,
           provenance,
+        });
+        continue;
+      }
+
+      sourcesUsed.reasoningLayer = "OPENAI";
+      sourcesUsed.openaiModel = model;
+
+      if (ai.output.decision === "NO_TRADE") {
+        decisions.push({
+          timestamp: new Date().toISOString(),
+          ticker: symbol,
+          strategy: strategyLabel,
+          decision: "NO_TRADE",
+          reasonCode: REASON.OPENAI_DECISION_NO_TRADE,
+          sourcesUsed,
+          sourcesMissing,
+          provenance: {
+            ...provenance,
+            openaiNoTradeReason: ai.output.no_trade_reason || null,
+          },
         });
         continue;
       }
@@ -403,6 +434,18 @@ export class StrictStrategyEngine {
         });
         continue;
       }
+
+      const snapshotForLog = {
+        ...snapshot,
+        candles_daily: {
+          ...snapshot.candles_daily,
+          recent_bars_desc: snapshot.candles_daily.recent_bars_desc.slice(0, 8),
+        },
+        news: {
+          ...snapshot.news,
+          items: snapshot.news.items.slice(0, 6),
+        },
+      };
 
       const assetType: AssetType =
         this.mode === "OPTIONS_MOMENTUM" && bestOpt ? "OPTION" : "STOCK";
@@ -427,10 +470,10 @@ export class StrictStrategyEngine {
         proposedNotional,
         stopPrice: quote.last * (assetType === "OPTION" ? 0.5 : 0.94),
         targetNote,
-        confidence: scored.confidence,
-        riskScore: scored.riskScore,
-        thesis: scored.thesis,
-        invalidation: scored.invalidation,
+        confidence: ai.output.confidence,
+        riskScore: ai.output.risk_score,
+        thesis: ai.output.thesis,
+        invalidation: ai.output.invalidation,
         facts: {
           last: quote.last,
           spreadPct,
@@ -444,9 +487,12 @@ export class StrictStrategyEngine {
             optionsChain:
               this.mode === "OPTIONS_MOMENTUM" ? "POLYGON" : "NOT_USED",
             webResearch: web.source,
+            reasoning: "OPENAI",
           },
           fundamentalsFromVendor: fundFromVendor,
           newsSkipped,
+          openaiModel: model,
+          openaiRationale: ai.output.rationale,
           webResearchOpenWebOnly: {
             label:
               "Supplemental open-web research — not market data; verify sources.",
@@ -463,7 +509,9 @@ export class StrictStrategyEngine {
           earningsScheduled: isEarn,
         },
         inferences: {
-          scored,
+          openaiStructuredOutput: ai.output,
+          openaiRawJson: ai.rawContent,
+          providerSnapshotSentToOpenAI: snapshotForLog,
           newsHeadlineSample: articles[0]?.headline,
           fundamentalsSnapshot: fundamentals,
         },

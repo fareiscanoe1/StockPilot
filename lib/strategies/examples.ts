@@ -33,7 +33,7 @@ export const exampleStrategies: {
     title: "Multi-factor swing (default)",
     description: "Blends technicals, event context, fundamentals snapshot, and news sentiment scores.",
     rules: [
-      "Confidence gating ~5.2/10 with risk ceiling — see `lib/engines/scoring.ts`.",
+      "Live desk uses OpenAI structured JSON over a vendor snapshot; see `lib/engines/openai-reasoning.ts`.",
       "Sector exposure caps enforced in RiskEngine parameters.",
     ],
   },

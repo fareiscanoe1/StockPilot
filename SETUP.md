@@ -59,6 +59,8 @@ DATABASE_URL="postgresql://earnings:earnings@localhost:5432/earnings_pilot"
 | `POLYGON_API_KEY` | US stocks, aggregates, **options chains** |
 | `FINNHUB_API_KEY` | Quotes if no Polygon, **earnings calendar**, **general + company news** |
 | `TAVILY_API_KEY` | **Web search** snippets merged into scanner rationale (optional) |
+| `OPENAI_API_KEY` | **Structured trade reasoning** (JSON in/out); not used for market data |
+| `OPENAI_REASONING_MODEL` | Optional Chat Completions model (default `gpt-4o-mini`) |
 | `CRON_SECRET` | Bearer token for `POST /api/cron/scan` |
 | `TELEGRAM_BOT_TOKEN` | Bot token for Telegram alerts |
 | `SMTP_*` / `EMAIL_FROM` | Outbound email |
