@@ -17,6 +17,38 @@ function normalizeCadence(v: unknown): CommanderPrefs["scanCadenceMin"] {
   return DEFAULT_COMMANDER_PREFS.scanCadenceMin;
 }
 
+function normalizeDiscoverySize(v: unknown): CommanderPrefs["discoveryUniverseSize"] {
+  const n = Number(v);
+  if (n === 10 || n === 25 || n === 50 || n === 100) return n;
+  return DEFAULT_COMMANDER_PREFS.discoveryUniverseSize;
+}
+
+function normalizeUniverseMode(v: unknown): CommanderPrefs["universeMode"] {
+  const s = typeof v === "string" ? v : "";
+  if (
+    s === "WATCHLIST_ONLY" ||
+    s === "AI_DISCOVERY_ONLY" ||
+    s === "HYBRID" ||
+    s === "CUSTOM_UNIVERSE"
+  ) {
+    return s;
+  }
+  return DEFAULT_COMMANDER_PREFS.universeMode;
+}
+
+function normalizeCustomUniverseSymbols(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out = new Set<string>();
+  for (const row of v) {
+    if (typeof row !== "string") continue;
+    const s = row.trim().toUpperCase();
+    if (!s) continue;
+    if (!/^[A-Z0-9.\-:]{1,24}$/.test(s)) continue;
+    out.add(s);
+  }
+  return [...out].slice(0, 120);
+}
+
 export function strategyModeFromPrimary(primary: CommanderPrimaryMode): StrategyMode {
   switch (primary) {
     case "AGGRESSIVE_GROWTH":
@@ -115,7 +147,42 @@ export function parseCommanderFromCustomRules(
     {
       ...base,
       ...raw,
+      universeMode: normalizeUniverseMode(raw.universeMode),
+      discoveryUniverseSize: normalizeDiscoverySize(raw.discoveryUniverseSize),
       scanCadenceMin: normalizeCadence(raw.scanCadenceMin),
+      watchlistPriorityBoost: clamp(
+        Number(raw.watchlistPriorityBoost ?? base.watchlistPriorityBoost),
+        0,
+        6,
+      ),
+      maxPositions: Math.round(clamp(Number(raw.maxPositions ?? base.maxPositions), 1, 30)),
+      maxPositionWeightPct: clamp(
+        Number(raw.maxPositionWeightPct ?? base.maxPositionWeightPct),
+        2,
+        100,
+      ),
+      maxSectorConcentrationPct: clamp(
+        Number(raw.maxSectorConcentrationPct ?? base.maxSectorConcentrationPct),
+        5,
+        100,
+      ),
+      minProbabilityPct: clamp(
+        Number(raw.minProbabilityPct ?? base.minProbabilityPct),
+        1,
+        99,
+      ),
+      minConfidenceScore: clamp(
+        Number(raw.minConfidenceScore ?? base.minConfidenceScore),
+        0,
+        10,
+      ),
+      minLiquidityScore: clamp(
+        Number(raw.minLiquidityScore ?? base.minLiquidityScore),
+        1,
+        100,
+      ),
+      cashFloorPct: clamp(Number(raw.cashFloorPct ?? base.cashFloorPct), 0, 100),
+      customUniverseSymbols: normalizeCustomUniverseSymbols(raw.customUniverseSymbols),
       allocation: { ...base.allocation, ...raw.allocation },
       toggles: { ...base.toggles, ...raw.toggles },
     },
@@ -127,6 +194,7 @@ export function parseCommanderFromCustomRules(
 function applyModeSideEffects(prefs: CommanderPrefs, profileMode: StrategyMode): CommanderPrefs {
   const next = { ...prefs, toggles: { ...prefs.toggles } };
   if (profileMode === "EARNINGS_HUNTER") next.toggles.earningsFocus = true;
+  if (profileMode === "OPTIONS_MOMENTUM") next.toggles.optionsEnabled = true;
   return next;
 }
 
@@ -138,6 +206,6 @@ export function buildCustomRulesWithCommander(
     prevCustom && typeof prevCustom === "object" && !Array.isArray(prevCustom)
       ? { ...(prevCustom as Record<string, unknown>) }
       : {};
-  prev.commander = { ...prefs, version: 1 };
+  prev.commander = { ...prefs, version: 2 };
   return prev;
 }

@@ -5,6 +5,7 @@ import type { DataStackSummary } from "@/lib/adapters/provider-factory";
 import type { EarningsCacheRow } from "@/lib/serializers/earnings-cache";
 import { useLiveDesk } from "@/components/live-scan/useLiveDesk";
 import { buildCommanderIdeas, groupIdeasByBucket } from "@/lib/commander/ideas";
+import { buildAllocationPlan } from "@/lib/commander/allocation";
 import { buildExecutiveSummary } from "@/lib/commander/summary";
 import { buildScanDigest } from "@/lib/commander/digest";
 import { formatRealDataLabel, panelRealDataStatus } from "@/lib/commander/data-status";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/commander/prefs";
 import {
   DEFAULT_COMMANDER_PREFS,
+  type CommanderAllocationPlan,
   type CommanderIdeaRow,
   type CommanderPrefs,
   type CommanderPrimaryMode,
@@ -62,6 +64,20 @@ type Props = {
   alerts: Array<{ id: string; title: string; body: string; createdAt: string }>;
   earnings: EarningsCacheRow[];
   watchlist: string[];
+  watchlists: Array<{
+    id: string;
+    name: string;
+    symbols: Array<{
+      id: string;
+      symbol: string;
+      exchange: string;
+      pinned: boolean;
+      highPriority: boolean;
+      muted: boolean;
+      ignored: boolean;
+      tags: string[];
+    }>;
+  }>;
   watchQuotes: Array<{ symbol: string; last: number | null }>;
   watchTrends: Array<{
     symbol: string;
@@ -93,6 +109,27 @@ const PRIMARY_OPTIONS: { value: CommanderPrimaryMode; label: string }[] = [
   { value: "EARNINGS_PLAYS", label: "Earnings plays" },
   { value: "CUSTOM_MIX", label: "Custom mix" },
 ];
+
+const UNIVERSE_MODE_OPTIONS: Array<{
+  value: CommanderPrefs["universeMode"];
+  label: string;
+}> = [
+  { value: "WATCHLIST_ONLY", label: "Watchlist only" },
+  { value: "AI_DISCOVERY_ONLY", label: "AI discovery only" },
+  { value: "HYBRID", label: "Hybrid (watchlist + discovery)" },
+  { value: "CUSTOM_UNIVERSE", label: "Custom universe" },
+];
+
+const DISCOVERY_SIZE_OPTIONS: Array<CommanderPrefs["discoveryUniverseSize"]> = [10, 25, 50, 100];
+
+const WATCH_TAG_OPTIONS = [
+  "aggressive",
+  "defensive",
+  "income",
+  "options",
+  "crypto",
+  "earnings",
+] as const;
 
 function tabCls(active: boolean) {
   return `rounded-md px-3 py-1.5 text-xs font-medium transition ${
@@ -171,9 +208,28 @@ function sparkPath(values: number[], width = 150, height = 42): string {
     .join(" ");
 }
 
-function timeAgo(iso: string | null): string {
+function formatUtcHms(iso: string | null): string {
   if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "—";
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss} UTC`;
+}
+
+function formatDisplayTime(iso: string | null, hydrated: boolean): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "—";
+  return hydrated ? d.toLocaleTimeString() : formatUtcHms(iso);
+}
+
+function timeAgo(iso: string | null, nowMs: number | null): string {
+  if (!iso || nowMs == null) return "—";
+  const ms = nowMs - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "—";
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s ago`;
@@ -206,6 +262,41 @@ function summarizePrefsShift(prev: CommanderPrefs, next: CommanderPrefs): string
   if (prev.scanCadenceMin !== next.scanCadenceMin) {
     notes.push(`background cadence ${prev.scanCadenceMin}m -> ${next.scanCadenceMin}m`);
   }
+  if (prev.universeMode !== next.universeMode) {
+    notes.push(
+      `universe mode ${prev.universeMode.replace(/_/g, " ").toLowerCase()} -> ${next.universeMode
+        .replace(/_/g, " ")
+        .toLowerCase()}`,
+    );
+  }
+  if (prev.discoveryUniverseSize !== next.discoveryUniverseSize) {
+    notes.push(`discovery size ${prev.discoveryUniverseSize} -> ${next.discoveryUniverseSize}`);
+  }
+  if (prev.watchlistPriorityBoost !== next.watchlistPriorityBoost) {
+    notes.push(
+      `watchlist boost ${prev.watchlistPriorityBoost.toFixed(1)} -> ${next.watchlistPriorityBoost.toFixed(1)}`,
+    );
+  }
+  if (prev.maxPositions !== next.maxPositions) {
+    notes.push(`max positions ${prev.maxPositions} -> ${next.maxPositions}`);
+  }
+  if (prev.maxPositionWeightPct !== next.maxPositionWeightPct) {
+    notes.push(`max position weight ${prev.maxPositionWeightPct}% -> ${next.maxPositionWeightPct}%`);
+  }
+  if (prev.minProbabilityPct !== next.minProbabilityPct) {
+    notes.push(`min probability ${prev.minProbabilityPct}% -> ${next.minProbabilityPct}%`);
+  }
+  if (prev.minConfidenceScore !== next.minConfidenceScore) {
+    notes.push(
+      `min confidence ${prev.minConfidenceScore.toFixed(1)} -> ${next.minConfidenceScore.toFixed(1)}`,
+    );
+  }
+  if (prev.minLiquidityScore !== next.minLiquidityScore) {
+    notes.push(`min liquidity ${prev.minLiquidityScore} -> ${next.minLiquidityScore}`);
+  }
+  if (prev.cashFloorPct !== next.cashFloorPct) {
+    notes.push(`cash floor ${prev.cashFloorPct}% -> ${next.cashFloorPct}%`);
+  }
   if (prev.toggles.cryptoEnabled !== next.toggles.cryptoEnabled) {
     notes.push(next.toggles.cryptoEnabled ? "crypto enabled" : "crypto disabled");
   }
@@ -224,6 +315,12 @@ function summarizePrefsShift(prev: CommanderPrefs, next: CommanderPrefs): string
   }
   if (prev.toggles.incomePriority !== next.toggles.incomePriority) {
     notes.push(next.toggles.incomePriority ? "income priority ON" : "income priority OFF");
+  }
+  if (prev.toggles.stocksEnabled !== next.toggles.stocksEnabled) {
+    notes.push(next.toggles.stocksEnabled ? "stocks enabled" : "stocks disabled");
+  }
+  if (prev.toggles.earningsEnabled !== next.toggles.earningsEnabled) {
+    notes.push(next.toggles.earningsEnabled ? "earnings enabled" : "earnings disabled");
   }
   return notes.length ? `Strategy posture changed: ${notes.join("; ")}.` : null;
 }
@@ -294,6 +391,7 @@ export function CommanderClient({
   alerts,
   earnings,
   watchlist,
+  watchlists,
   watchQuotes,
   watchTrends,
   liveNews,
@@ -323,6 +421,17 @@ export function CommanderClient({
   const [expandedIdea, setExpandedIdea] = useState<string | null>(null);
   const [sourceIdea, setSourceIdea] = useState<CommanderIdeaRow | null>(null);
   const [accountRows, setAccountRows] = useState(virtualAccounts);
+  const [managedWatchlists, setManagedWatchlists] = useState(watchlists);
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState(watchlists[0]?.id ?? "");
+  const [watchSymbolDraft, setWatchSymbolDraft] = useState("");
+  const [newWatchlistName, setNewWatchlistName] = useState("");
+  const [watchTagsDraft, setWatchTagsDraft] = useState<string[]>([]);
+  const [watchPinDraft, setWatchPinDraft] = useState(false);
+  const [watchPriorityDraft, setWatchPriorityDraft] = useState(false);
+  const [watchlistBusy, setWatchlistBusy] = useState(false);
+  const [customUniverseDraft, setCustomUniverseDraft] = useState(
+    (initialCommanderPrefs.customUniverseSymbols ?? []).join(", "),
+  );
   const [cashSetDraft, setCashSetDraft] = useState<Record<string, string>>(() =>
     Object.fromEntries(virtualAccounts.map((a) => [a.id, a.cashBalance.toFixed(2)])),
   );
@@ -339,7 +448,8 @@ export function CommanderClient({
     initialOperatorCommentary,
   );
   const [feedConnected, setFeedConnected] = useState(false);
-  const [clockNow, setClockNow] = useState(() => Date.now());
+  const [clockNow, setClockNow] = useState<number | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const [lastScanDelta, setLastScanDelta] = useState<string>("Waiting for first completed scan…");
   const scanNarrationRef = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -351,6 +461,10 @@ export function CommanderClient({
   const ideas = useMemo(
     () => buildCommanderIdeas(desk.lastSnapshot, prefs),
     [desk.lastSnapshot, prefs],
+  );
+  const allocationPlan = useMemo<CommanderAllocationPlan>(
+    () => buildAllocationPlan(ideas, prefs, desk.lastSnapshot),
+    [ideas, prefs, desk.lastSnapshot],
   );
   const buckets = useMemo(() => groupIdeasByBucket(ideas), [ideas]);
 
@@ -485,6 +599,8 @@ export function CommanderClient({
   }, [addLocalCommentary, persistStrategy, runScan]);
 
   useEffect(() => {
+    setHydrated(true);
+    setClockNow(Date.now());
     const t = window.setInterval(() => setClockNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
@@ -506,6 +622,13 @@ export function CommanderClient({
       return next;
     });
   }, [virtualAccounts]);
+
+  useEffect(() => {
+    setManagedWatchlists(watchlists);
+    if (!selectedWatchlistId && watchlists[0]?.id) {
+      setSelectedWatchlistId(watchlists[0].id);
+    }
+  }, [watchlists, selectedWatchlistId]);
 
   useEffect(() => {
     void runScan();
@@ -815,6 +938,136 @@ export function CommanderClient({
     [addLocalCommentary, runScan, triggerBackgroundScan],
   );
 
+  const refreshWatchlists = useCallback(async () => {
+    try {
+      const res = await fetch("/api/watchlist", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as { watchlists?: Props["watchlists"] };
+      if (Array.isArray(body.watchlists)) {
+        setManagedWatchlists(body.watchlists);
+        if (!selectedWatchlistId && body.watchlists[0]?.id) {
+          setSelectedWatchlistId(body.watchlists[0].id);
+        }
+      }
+    } catch {
+      // keep stale list if refresh fails
+    }
+  }, [selectedWatchlistId]);
+
+  const mutateWatchlist = useCallback(
+    async (
+      body: Record<string, unknown>,
+      opts?: { method?: "POST" | "PATCH" | "DELETE"; successNote?: string },
+    ) => {
+      setWatchlistBusy(true);
+      try {
+        const method = opts?.method ?? "PATCH";
+        const res = await fetch("/api/watchlist", {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          addLocalCommentary(`Watchlist update failed: ${j.error ?? "unknown error"}.`, {
+            kind: "RISK_ALERT",
+            eventType: "watchlist_update_failed",
+          });
+          return false;
+        }
+        if (opts?.successNote) {
+          addLocalCommentary(opts.successNote, {
+            kind: "SYSTEM",
+            eventType: "watchlist_updated",
+          });
+        }
+        await refreshWatchlists();
+        await runScan();
+        return true;
+      } catch {
+        addLocalCommentary("Watchlist update failed (network/server).", {
+          kind: "RISK_ALERT",
+          eventType: "watchlist_update_failed",
+        });
+        return false;
+      } finally {
+        setWatchlistBusy(false);
+      }
+    },
+    [addLocalCommentary, refreshWatchlists, runScan],
+  );
+
+  const addManualWatchSymbol = useCallback(async () => {
+    const symbol = watchSymbolDraft.trim().toUpperCase();
+    if (!selectedWatchlistId || !symbol) return;
+    const ok = await mutateWatchlist(
+      {
+        watchlistId: selectedWatchlistId,
+        symbol,
+        exchange: "US",
+        pinned: watchPinDraft,
+        highPriority: watchPriorityDraft,
+        tags: watchTagsDraft,
+      },
+      { method: "POST", successNote: `Added ${symbol} to watchlist.` },
+    );
+    if (ok) {
+      setWatchSymbolDraft("");
+      setWatchTagsDraft([]);
+      setWatchPinDraft(false);
+      setWatchPriorityDraft(false);
+    }
+  }, [
+    mutateWatchlist,
+    selectedWatchlistId,
+    watchPinDraft,
+    watchPriorityDraft,
+    watchSymbolDraft,
+    watchTagsDraft,
+  ]);
+
+  const createWatchlist = useCallback(async () => {
+    const name = newWatchlistName.trim();
+    if (!name) return;
+    const ok = await mutateWatchlist(
+      { name },
+      { method: "POST", successNote: `Created watchlist "${name}".` },
+    );
+    if (ok) setNewWatchlistName("");
+  }, [mutateWatchlist, newWatchlistName]);
+
+  const setSymbolPreference = useCallback(
+    async (
+      symbol: string,
+      patch: {
+        pinned?: boolean;
+        highPriority?: boolean;
+        muted?: boolean;
+        ignored?: boolean;
+        tags?: string[];
+      },
+      note: string,
+    ) => {
+      await mutateWatchlist(
+        { symbol, exchange: "US", ...patch },
+        { method: "PATCH", successNote: note },
+      );
+    },
+    [mutateWatchlist],
+  );
+
+  const addDiscoveredToWatchlist = useCallback(
+    async (symbol: string) => {
+      const targetWatchlistId = selectedWatchlistId || managedWatchlists[0]?.id;
+      if (!targetWatchlistId) return;
+      await mutateWatchlist(
+        { watchlistId: targetWatchlistId, symbol, exchange: "US" },
+        { method: "POST", successNote: `Added discovered symbol ${symbol} to watchlist.` },
+      );
+    },
+    [managedWatchlists, mutateWatchlist, selectedWatchlistId],
+  );
+
   const submitCommand = async () => {
     const t = commandInput.trim();
     if (!t || chatBusy) return;
@@ -1010,6 +1263,21 @@ export function CommanderClient({
             <span className="text-[var(--muted)]">{row.assetType}</span>{" "}
             <span className="rounded bg-white/10 px-1.5 py-0.5">{row.stance}</span>{" "}
             <span className="text-[var(--muted)]">{row.bucket.replace(/_/g, " ")}</span>
+            <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+              <span className="rounded border border-[var(--border)] px-1 py-0.5 text-[var(--muted)]">
+                {row.source.replace(/_/g, " ")}
+              </span>
+              {row.isPinned && (
+                <span className="rounded border border-amber-400/40 px-1 py-0.5 text-amber-200">
+                  pinned
+                </span>
+              )}
+              {row.isHighPriority && (
+                <span className="rounded border border-sky-400/40 px-1 py-0.5 text-sky-200">
+                  high priority
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1024,7 +1292,8 @@ export function CommanderClient({
               Sources
             </button>
             <div className="text-[var(--muted)]">
-              conf {row.confidence.toFixed(1)} · risk {row.riskScore.toFixed(1)}
+              p {row.probabilityPct}% · conf {row.confidence.toFixed(1)} · edge{" "}
+              {row.expectedEdge.toFixed(2)} · risk {row.riskScore.toFixed(1)}
             </div>
           </div>
         </div>
@@ -1042,6 +1311,24 @@ export function CommanderClient({
             <p>
               <span className="text-[var(--muted)]">Thesis: </span>
               {row.thesis}
+            </p>
+            <p>
+              <span className="text-[var(--muted)]">Why it may fail: </span>
+              {row.candidate?.invalidation ?? "No invalidation recorded."}
+            </p>
+            <p>
+              <span className="text-[var(--muted)]">Suggested allocation: </span>
+              {row.suggestedWeightPct.toFixed(1)}% · uncertainty {row.uncertaintyLevel}
+            </p>
+            <p>
+              <span className="text-[var(--muted)]">Raw signals: </span>
+              trend {row.trendStrengthScore.toFixed(0)} · liquidity{" "}
+              {row.liquidityQualityScore.toFixed(0)} · pattern{" "}
+              {row.historicalPatternQuality.toFixed(0)} · event {row.eventEdgeScore.toFixed(0)} ·
+              R/R {row.rewardRiskEstimate.toFixed(2)}
+            </p>
+            <p className="text-[10px] text-[var(--muted)]">
+              Allocation logic: {row.finalJudgment.reason}
             </p>
             <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-black/40 p-2 text-[10px] text-[var(--muted)]">
               {row.tradeSummary}
@@ -1095,6 +1382,15 @@ export function CommanderClient({
   const latestHistory = scanHistory[0] ?? null;
   const bestIdeaNow =
     ideas.find((i) => i.stance === "TRADE") ?? ideas.find((i) => i.stance === "WATCH") ?? null;
+  const bestWatchlistIdeaNow =
+    ideas.find((i) => i.isWatchlist && i.stance === "TRADE") ??
+    ideas.find((i) => i.isWatchlist && i.stance === "WATCH") ??
+    null;
+  const bestDiscoveredIdeaNow =
+    ideas.find((i) => !i.isWatchlist && i.stance === "TRADE") ??
+    ideas.find((i) => !i.isWatchlist && i.stance === "WATCH") ??
+    null;
+  const newlyDiscoveredRows = ideas.filter((i) => !i.isWatchlist && i.source !== "custom_universe");
   const strongestBucketRowsNow: Array<[string, number]> = [
     ["aggressive", buckets.aggressive_growth.length],
     ["defensive", buckets.defensive.length],
@@ -1119,9 +1415,13 @@ export function CommanderClient({
   const strongestCategoryDisplay = backgroundRunIsNewer
     ? (latestHistory?.strongestCategory ?? strongestCategoryNow)
     : strongestCategoryNow;
-  const nextScanSec = deskHeartbeat.nextScheduledScanAt
-    ? Math.max(0, Math.floor((new Date(deskHeartbeat.nextScheduledScanAt).getTime() - clockNow) / 1000))
-    : null;
+  const nextScanSec =
+    deskHeartbeat.nextScheduledScanAt && clockNow != null
+      ? Math.max(
+          0,
+          Math.floor((new Date(deskHeartbeat.nextScheduledScanAt).getTime() - clockNow) / 1000),
+        )
+      : null;
   const idleStatusLine = deskHeartbeat.scanInProgress
     ? "Worker currently running a background scan."
     : deskHeartbeat.behindSchedule
@@ -1145,6 +1445,9 @@ export function CommanderClient({
     const source = desk.lastSnapshot?.universeSource;
     if (source === "explicit_symbol") return "single-symbol command";
     if (source === "watchlist") return "watchlist symbols";
+    if (source === "ai_discovery") return "AI discovery universe";
+    if (source === "watchlist_plus_discovery") return "hybrid watchlist + discovery";
+    if (source === "custom_universe") return "custom universe";
     if (source === "portfolio_holdings") return "portfolio holdings";
     if (source === "none") return "no source configured";
     return watchlist.length > 0 ? "watchlist symbols" : "no source configured";
@@ -1153,6 +1456,11 @@ export function CommanderClient({
     a.localeCompare(b),
   );
   const stepRows = Object.entries(desk.steps).sort(([a], [b]) => a.localeCompare(b));
+  const selectedWatchlist =
+    managedWatchlists.find((w) => w.id === selectedWatchlistId) ?? managedWatchlists[0] ?? null;
+  const selectedWatchlistSymbols = [...(selectedWatchlist?.symbols ?? [])].sort((a, b) =>
+    a.symbol.localeCompare(b.symbol),
+  );
 
   return (
     <div className="space-y-4">
@@ -1223,18 +1531,20 @@ export function CommanderClient({
         </div>
         <div className="card p-3">
           <p className="text-[10px] uppercase text-[var(--muted)]">Last heartbeat</p>
-          <p className="mt-2 text-xs text-foreground">{timeAgo(deskHeartbeat.workerLastHeartbeatAt)}</p>
+          <p className="mt-2 text-xs text-foreground">
+            {timeAgo(deskHeartbeat.workerLastHeartbeatAt, clockNow)}
+          </p>
           <p className="mt-1 text-[10px] text-[var(--muted)]">
             lag {deskHeartbeat.workerLagSec != null ? `${deskHeartbeat.workerLagSec}s` : "—"}
           </p>
         </div>
         <div className="card p-3">
           <p className="text-[10px] uppercase text-[var(--muted)]">Last completed scan</p>
-          <p className="mt-2 text-xs text-foreground">{timeAgo(deskHeartbeat.lastCompletedScanAt)}</p>
+          <p className="mt-2 text-xs text-foreground">
+            {timeAgo(deskHeartbeat.lastCompletedScanAt, clockNow)}
+          </p>
           <p className="mt-1 text-[10px] text-[var(--muted)]">
-            {deskHeartbeat.lastCompletedScanAt
-              ? new Date(deskHeartbeat.lastCompletedScanAt).toLocaleTimeString()
-              : "—"}
+            {formatDisplayTime(deskHeartbeat.lastCompletedScanAt, hydrated)}
           </p>
         </div>
         <div className="card p-3">
@@ -1272,7 +1582,7 @@ export function CommanderClient({
             {saving ? "Saving…" : "Changes auto-sync & trigger rescan"}
           </span>
         </div>
-        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+        <div className="mt-3 grid gap-4 lg:grid-cols-3">
           <label className="block text-xs text-[var(--muted)]">
             Primary mode
             <select
@@ -1309,6 +1619,25 @@ export function CommanderClient({
               <option value="high">High</option>
             </select>
           </label>
+          <label className="block text-xs text-[var(--muted)]">
+            Universe mode
+            <select
+              className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm"
+              value={prefs.universeMode}
+              onChange={(e) =>
+                setPrefs((p) => ({
+                  ...p,
+                  universeMode: e.target.value as CommanderPrefs["universeMode"],
+                }))
+              }
+            >
+              {UNIVERSE_MODE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           {(
@@ -1342,6 +1671,8 @@ export function CommanderClient({
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {(
             [
+              ["stocksEnabled", "Stocks enabled"],
+              ["earningsEnabled", "Earnings enabled"],
               ["earningsFocus", "Earnings focus"],
               ["highConvictionOnly", "High conviction only"],
               ["incomePriority", "Income priority"],
@@ -1411,7 +1742,7 @@ export function CommanderClient({
         )}
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 lg:grid-cols-4">
         <div className="card p-3">
           <p className="text-[10px] font-medium uppercase text-[var(--muted)]">Best opportunity now</p>
           {bestIdeaDisplay ? (
@@ -1431,6 +1762,22 @@ export function CommanderClient({
               {(backgroundRunIsNewer || !bestIdeaNow) && latestHistory?.whatChanged && (
                 <p className="mt-1 text-xs text-[var(--muted)]">{latestHistory.whatChanged}</p>
               )}
+              <p className="mt-2 text-[10px] text-[var(--muted)]">
+                Best watchlist idea:{" "}
+                <span className="text-foreground">
+                  {bestWatchlistIdeaNow
+                    ? `${bestWatchlistIdeaNow.symbol} · p ${bestWatchlistIdeaNow.probabilityPct}%`
+                    : "none"}
+                </span>
+              </p>
+              <p className="text-[10px] text-[var(--muted)]">
+                Best newly discovered:{" "}
+                <span className="text-foreground">
+                  {bestDiscoveredIdeaNow
+                    ? `${bestDiscoveredIdeaNow.symbol} · p ${bestDiscoveredIdeaNow.probabilityPct}%`
+                    : "none"}
+                </span>
+              </p>
             </>
           ) : (
             <p className="mt-2 text-xs text-amber-200">No qualified idea yet this cycle.</p>
@@ -1446,6 +1793,28 @@ export function CommanderClient({
               ? `${strongestBucketNow?.[1] ?? 0} candidate row(s) currently leading.`
               : "From latest background scan history."}
           </p>
+          <p className="mt-2 text-[10px] text-[var(--muted)]">
+            Posture now:{" "}
+            <span className="text-foreground">{allocationPlan.posture}</span>
+          </p>
+        </div>
+        <div className="card p-3">
+          <p className="text-[10px] font-medium uppercase text-[var(--muted)]">Allocator output</p>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            Stocks <span className="text-foreground">{allocationPlan.category.stocksPct}%</span> ·
+            Options <span className="text-foreground">{allocationPlan.category.optionsPct}%</span> ·
+            Crypto <span className="text-foreground">{allocationPlan.category.cryptoPct}%</span> ·
+            Cash <span className="text-foreground">{allocationPlan.category.cashPct}%</span>
+          </p>
+          <ul className="mt-2 space-y-1 text-[10px] text-[var(--muted)]">
+            {allocationPlan.ideas.slice(0, 3).map((idea) => (
+              <li key={`alloc-${idea.symbol}`} className="rounded border border-[var(--border)] bg-black/20 px-2 py-1">
+                <span className="font-mono text-foreground">{idea.symbol}</span> {idea.weightPct.toFixed(1)}% · p{" "}
+                {idea.probabilityPct}% · edge {idea.expectedEdge.toFixed(2)}
+              </li>
+            ))}
+            {allocationPlan.ideas.length === 0 && <li>No deployable ideas — keep cash elevated.</li>}
+          </ul>
         </div>
         <div className="card p-3">
           <p className="text-[10px] font-medium uppercase text-[var(--muted)]">What changed</p>
@@ -1476,6 +1845,13 @@ export function CommanderClient({
             <p className="mt-1 text-xs text-[var(--accent)]">{formatRealDataLabel(marketStatus)}</p>
             <p className="mt-2 text-xs text-[var(--muted)]">
               Universe source: {universeSourceLabel}
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Universe mode:{" "}
+              <span className="text-foreground">
+                {prefs.universeMode.replace(/_/g, " ").toLowerCase()}
+              </span>{" "}
+              · discovery size {prefs.discoveryUniverseSize}
             </p>
             <p className="mt-1 text-xs text-[var(--muted)]">
               Search scope: {searchUniverseLabel}
@@ -1517,6 +1893,12 @@ export function CommanderClient({
               Searching {searchUniverse.length} symbol(s) from {universeSourceLabel}:{" "}
               <span className="text-foreground">{searchUniverseLabel}</span>
             </p>
+            {desk.lastSnapshot && (
+              <p className="mt-1 text-[10px] text-[var(--muted)]">
+                Watchlist candidates {desk.lastSnapshot.watchlistUniverse.length} · discovery{" "}
+                {desk.lastSnapshot.discoveryUniverse.length} · custom {desk.lastSnapshot.customUniverse.length}
+              </p>
+            )}
             <div className="mt-2 grid gap-2 lg:grid-cols-3">
               <div className="rounded border border-[var(--border)] bg-black/20 p-2">
                 <p className="text-[10px] font-medium uppercase text-[var(--muted)]">Per-symbol phase</p>
@@ -1603,7 +1985,7 @@ export function CommanderClient({
                 >
                   <p className="flex items-center justify-between">
                     <span className="font-medium text-foreground">
-                      {new Date(row.completedAt).toLocaleTimeString()} · {row.status}
+                      {formatDisplayTime(row.completedAt, hydrated)} · {row.status}
                     </span>
                     <span className="text-[var(--muted)]">
                       opp {row.opportunitiesCount} · OpenAI {row.openAiCalls}
@@ -1630,6 +2012,18 @@ export function CommanderClient({
                 </p>
               )}
             </div>
+          </div>
+          <div className="card p-3">
+            <p className="text-[10px] font-medium uppercase text-[var(--muted)]">
+              Allocation logic (explainability)
+            </p>
+            <ul className="mt-2 space-y-1 text-[10px] text-[var(--muted)]">
+              {allocationPlan.explanation.map((line, i) => (
+                <li key={`alloc-exp-${i}`} className="rounded border border-[var(--border)] bg-black/20 px-2 py-1">
+                  {line}
+                </li>
+              ))}
+            </ul>
           </div>
           <div className="card p-3">
             <p className="text-[10px] font-medium uppercase text-[var(--muted)]">Why ideas got rejected</p>
@@ -1773,15 +2167,99 @@ export function CommanderClient({
       )}
 
       {tab === "opportunities" && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {boardSection("Best overall", ideas.slice(0, 12))}
-          {boardSection("Aggressive growth", buckets.aggressive_growth)}
-          {boardSection("Defensive", buckets.defensive)}
-          {boardSection("Income", buckets.highest_income)}
-          {boardSection("Options", buckets.options)}
-          {boardSection("Crypto", buckets.crypto)}
-          {boardSection("Watchlist only", buckets.watchlist_only)}
-          {boardSection("Avoid / too risky", buckets.avoid)}
+        <div className="space-y-4">
+          <div className="card p-3">
+            <p className="text-[10px] font-medium uppercase text-[var(--muted)]">
+              Newly discovered opportunities
+            </p>
+            <p className="mt-1 text-[10px] text-[var(--muted)]">
+              Symbols outside your watchlist surfaced by AI discovery. You can promote, mute, or ignore them.
+            </p>
+            <div className="mt-2 max-h-56 space-y-2 overflow-y-auto">
+              {newlyDiscoveredRows.length === 0 && (
+                <p className="text-xs text-[var(--muted)]">
+                  No new discovery names this pass.
+                </p>
+              )}
+              {newlyDiscoveredRows.slice(0, 18).map((row) => (
+                <div
+                  key={`discovered-${row.symbol}`}
+                  className="rounded border border-[var(--border)] bg-black/20 px-2 py-1.5 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-mono text-foreground">
+                      {row.symbol} · p {row.probabilityPct}% · edge {row.expectedEdge.toFixed(2)}
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] hover:bg-white/5 disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() => void addDiscoveredToWatchlist(row.symbol)}
+                      >
+                        Add to watchlist
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] hover:bg-white/5 disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(row.symbol, { ignored: true }, `Ignored ${row.symbol}.`)
+                        }
+                      >
+                        Ignore
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] hover:bg-white/5 disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(row.symbol, { muted: true }, `Muted ${row.symbol}.`)
+                        }
+                      >
+                        Mute
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] hover:bg-white/5 disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(row.symbol, { pinned: true }, `Pinned ${row.symbol}.`)
+                        }
+                      >
+                        Pin
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] hover:bg-white/5 disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(
+                            row.symbol,
+                            { highPriority: true },
+                            `Marked ${row.symbol} high priority.`,
+                          )
+                        }
+                      >
+                        High priority
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1 text-[10px] text-[var(--muted)]">{row.catalyst || row.thesis}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {boardSection("Best overall", ideas.slice(0, 12))}
+            {boardSection("Aggressive growth", buckets.aggressive_growth)}
+            {boardSection("Defensive", buckets.defensive)}
+            {boardSection("Income", buckets.highest_income)}
+            {boardSection("Options", buckets.options)}
+            {boardSection("Crypto", buckets.crypto)}
+            {boardSection("Watchlist only", buckets.watchlist_only)}
+            {boardSection("Avoid / too risky", buckets.avoid)}
+          </div>
         </div>
       )}
 
@@ -1793,12 +2271,16 @@ export function CommanderClient({
       )}
 
       {tab === "crypto" && (
-        <div className="card p-4">
-          <p className="text-sm font-medium text-foreground">Crypto opportunities</p>
-          <p className="mt-2 text-xs text-amber-200">{formatRealDataLabel(cryptoStatus)}</p>
-          <p className="mt-2 text-xs text-[var(--muted)]">
-            Toggle &quot;Crypto enabled&quot; controls whether we would surface crypto — adapters are not wired in this STRICT build, so the panel stays blocked until real feeds exist.
-          </p>
+        <div className="space-y-3">
+          <div className="card p-4">
+            <p className="text-sm font-medium text-foreground">Crypto opportunities</p>
+            <p className="mt-2 text-xs text-amber-200">{formatRealDataLabel(cryptoStatus)}</p>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              Strict crypto discovery uses live FINNHUB crypto candles/quotes (no mocks). If a symbol
+              fails quote/volume/candle checks, it is blocked and excluded from allocation.
+            </p>
+          </div>
+          {boardSection("Crypto ideas", buckets.crypto)}
         </div>
       )}
 
@@ -2052,7 +2534,7 @@ export function CommanderClient({
                     >
                       {row.kind}
                     </span>
-                    <span className="text-[var(--muted)]">{timeAgo(row.createdAt)}</span>
+                    <span className="text-[var(--muted)]">{timeAgo(row.createdAt, clockNow)}</span>
                   </p>
                   <p className="mt-1 text-[var(--foreground)]">{row.message}</p>
                 </li>
@@ -2093,64 +2575,500 @@ export function CommanderClient({
       )}
 
       {tab === "settings" && (
-        <div className="card space-y-2 p-4 text-sm text-[var(--muted)]">
-          <label className="block text-xs text-[var(--muted)]">
-            Background scan cadence
-            <select
-              className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
-              value={prefs.scanCadenceMin}
-              onChange={(e) =>
-                setPrefs((p) => ({
-                  ...p,
-                  scanCadenceMin: Number(e.target.value) as CommanderPrefs["scanCadenceMin"],
-                }))
-              }
-            >
-              {[1, 3, 5, 10].map((m) => (
-                <option key={m} value={m}>
-                  Every {m} minute{m === 1 ? "" : "s"}
-                </option>
+        <div className="space-y-4">
+          <div className="card space-y-3 p-4 text-sm text-[var(--muted)]">
+            <p className="text-xs font-medium uppercase text-foreground">Universe + allocator controls</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block text-xs text-[var(--muted)]">
+                Background scan cadence
+                <select
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.scanCadenceMin}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      scanCadenceMin: Number(e.target.value) as CommanderPrefs["scanCadenceMin"],
+                    }))
+                  }
+                >
+                  {[1, 3, 5, 10].map((m) => (
+                    <option key={m} value={m}>
+                      Every {m} minute{m === 1 ? "" : "s"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Universe mode
+                <select
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.universeMode}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      universeMode: e.target.value as CommanderPrefs["universeMode"],
+                    }))
+                  }
+                >
+                  {UNIVERSE_MODE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Discovery universe size
+                <select
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.discoveryUniverseSize}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      discoveryUniverseSize: Number(
+                        e.target.value,
+                      ) as CommanderPrefs["discoveryUniverseSize"],
+                    }))
+                  }
+                >
+                  {DISCOVERY_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n} symbols
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Watchlist priority boost ({prefs.watchlistPriorityBoost.toFixed(1)})
+                <input
+                  type="range"
+                  min={0}
+                  max={6}
+                  step={0.1}
+                  className="mt-1 w-full"
+                  value={prefs.watchlistPriorityBoost}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      watchlistPriorityBoost: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Max positions
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.maxPositions}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      maxPositions: Math.max(1, Math.min(30, Number(e.target.value) || 1)),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Max position weight (%)
+                <input
+                  type="number"
+                  min={2}
+                  max={100}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.maxPositionWeightPct}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      maxPositionWeightPct: Math.max(2, Math.min(100, Number(e.target.value) || 2)),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Max sector concentration (%)
+                <input
+                  type="number"
+                  min={5}
+                  max={100}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.maxSectorConcentrationPct}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      maxSectorConcentrationPct: Math.max(
+                        5,
+                        Math.min(100, Number(e.target.value) || 5),
+                      ),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Minimum probability for inclusion (%)
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.minProbabilityPct}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      minProbabilityPct: Math.max(1, Math.min(99, Number(e.target.value) || 1)),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Minimum confidence score (0-10)
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.minConfidenceScore}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      minConfidenceScore: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Minimum liquidity score
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.minLiquidityScore}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      minLiquidityScore: Math.max(1, Math.min(100, Number(e.target.value) || 1)),
+                    }))
+                  }
+                />
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Cash floor (%)
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={prefs.cashFloorPct}
+                  onChange={(e) =>
+                    setPrefs((p) => ({
+                      ...p,
+                      cashFloorPct: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+              {(
+                [
+                  ["stocksEnabled", "Stocks enabled"],
+                  ["optionsEnabled", "Options enabled"],
+                  ["cryptoEnabled", "Crypto enabled"],
+                  ["earningsEnabled", "Earnings enabled"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="flex cursor-pointer items-center gap-2 text-[var(--muted)]">
+                  <input
+                    type="checkbox"
+                    checked={prefs.toggles[key]}
+                    onChange={(e) =>
+                      setPrefs((p) => ({
+                        ...p,
+                        toggles: { ...p.toggles, [key]: e.target.checked },
+                      }))
+                    }
+                  />
+                  {label}
+                </label>
               ))}
-            </select>
-          </label>
-          <p className="text-xs">
-            Next automatic background scan:{" "}
-            <span className="text-foreground">
-              {deskHeartbeat.nextScheduledScanAt
-                ? `${new Date(deskHeartbeat.nextScheduledScanAt).toLocaleTimeString()} (${timeAgo(
-                    deskHeartbeat.nextScheduledScanAt,
-                  )})`
-                : "not scheduled yet"}
-            </span>
-          </p>
-          <p className="text-xs">
-            Heartbeat status:{" "}
-            <span className="text-foreground">
-              {deskHeartbeat.workerStatus} · {deskHeartbeat.deskAlive ? "alive" : "stale"}
-            </span>
-          </p>
-          <p>
-            Deep notification &amp; journal controls:{" "}
-            <Link href="/notifications" className="text-[var(--accent)] underline">
-              Notifications
-            </Link>
-            ,{" "}
-            <Link href="/strategy" className="text-[var(--accent)] underline">
-              Strategy settings
-            </Link>
-            ,{" "}
-            <Link href="/settings" className="text-[var(--accent)] underline">
-              Settings
-            </Link>
-            .
-          </p>
-          <button
-            type="button"
-            className="text-xs text-[var(--accent)]"
-            onClick={() => setPrefs({ ...DEFAULT_COMMANDER_PREFS })}
-          >
-            Reset commander UI prefs (local only until saved)
-          </button>
+            </div>
+
+            {prefs.universeMode === "CUSTOM_UNIVERSE" && (
+              <label className="block text-xs text-[var(--muted)]">
+                Custom universe symbols (comma or space separated)
+                <textarea
+                  className="mt-1 min-h-[72px] w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-xs text-foreground"
+                  value={customUniverseDraft}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setCustomUniverseDraft(raw);
+                    const next = raw
+                      .split(/[\s,]+/)
+                      .map((s) => s.trim().toUpperCase())
+                      .filter((s) => /^[A-Z0-9.\-:]{1,24}$/.test(s));
+                    setPrefs((p) => ({ ...p, customUniverseSymbols: [...new Set(next)].slice(0, 120) }));
+                  }}
+                />
+              </label>
+            )}
+
+            <p className="text-xs">
+              Next automatic background scan:{" "}
+              <span className="text-foreground">
+                {deskHeartbeat.nextScheduledScanAt
+                  ? `${formatDisplayTime(deskHeartbeat.nextScheduledScanAt, hydrated)} (${timeAgo(
+                      deskHeartbeat.nextScheduledScanAt,
+                      clockNow,
+                    )})`
+                  : "not scheduled yet"}
+              </span>
+            </p>
+            <p className="text-xs">
+              Heartbeat status:{" "}
+              <span className="text-foreground">
+                {deskHeartbeat.workerStatus} · {deskHeartbeat.deskAlive ? "alive" : "stale"}
+              </span>
+            </p>
+            <button
+              type="button"
+              className="text-xs text-[var(--accent)]"
+              onClick={() => setPrefs({ ...DEFAULT_COMMANDER_PREFS })}
+            >
+              Reset commander UI prefs (local only until saved)
+            </button>
+          </div>
+
+          <div className="card space-y-3 p-4 text-sm text-[var(--muted)]">
+            <p className="text-xs font-medium uppercase text-foreground">Watchlist manager</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="block text-xs text-[var(--muted)] md:col-span-2">
+                Active watchlist
+                <select
+                  className="mt-1 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-foreground"
+                  value={selectedWatchlist?.id ?? ""}
+                  onChange={(e) => setSelectedWatchlistId(e.target.value)}
+                >
+                  {managedWatchlists.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name} ({w.symbols.length})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Create watchlist
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="text"
+                    className="w-full rounded-md border border-[var(--border)] bg-black/30 px-2 py-2 text-xs text-foreground"
+                    value={newWatchlistName}
+                    onChange={(e) => setNewWatchlistName(e.target.value)}
+                    placeholder="e.g. Swing Ideas"
+                  />
+                  <button
+                    type="button"
+                    className="rounded border border-[var(--border)] px-2 py-1 text-xs text-foreground disabled:opacity-50"
+                    disabled={watchlistBusy}
+                    onClick={() => void createWatchlist()}
+                  >
+                    Create
+                  </button>
+                </div>
+              </label>
+            </div>
+
+            <div className="rounded border border-[var(--border)] bg-black/20 p-2">
+              <p className="text-xs text-foreground">Add symbol manually</p>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <input
+                  type="text"
+                  value={watchSymbolDraft}
+                  onChange={(e) => setWatchSymbolDraft(e.target.value.toUpperCase())}
+                  placeholder="Ticker (e.g. NVDA)"
+                  className="rounded border border-[var(--border)] bg-black/20 px-2 py-1 text-xs text-foreground"
+                />
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={watchPinDraft}
+                      onChange={(e) => setWatchPinDraft(e.target.checked)}
+                    />
+                    Pin
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={watchPriorityDraft}
+                      onChange={(e) => setWatchPriorityDraft(e.target.checked)}
+                    />
+                    High priority
+                  </label>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {WATCH_TAG_OPTIONS.map((tag) => {
+                  const active = watchTagsDraft.includes(tag);
+                  return (
+                    <button
+                      key={`new-tag-${tag}`}
+                      type="button"
+                      className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                        active
+                          ? "border-sky-400/50 bg-sky-500/20 text-sky-100"
+                          : "border-[var(--border)] text-[var(--muted)]"
+                      }`}
+                      onClick={() =>
+                        setWatchTagsDraft((prev) =>
+                          prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+                        )
+                      }
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                className="mt-2 rounded border border-[var(--border)] px-2 py-1 text-xs text-foreground disabled:opacity-50"
+                disabled={watchlistBusy || !watchSymbolDraft.trim() || !selectedWatchlist}
+                onClick={() => void addManualWatchSymbol()}
+              >
+                Add symbol
+              </button>
+            </div>
+
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+              {selectedWatchlistSymbols.length === 0 && (
+                <p className="text-xs text-[var(--muted)]">No symbols in this watchlist.</p>
+              )}
+              {selectedWatchlistSymbols.map((s) => (
+                <div
+                  key={s.id}
+                  className="rounded border border-[var(--border)] bg-black/20 px-2 py-1.5 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-mono text-foreground">
+                      {s.symbol} <span className="text-[var(--muted)]">({s.exchange})</span>
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(
+                            s.symbol,
+                            { pinned: !s.pinned },
+                            `${s.pinned ? "Unpinned" : "Pinned"} ${s.symbol}.`,
+                          )
+                        }
+                      >
+                        {s.pinned ? "Unpin" : "Pin"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(
+                            s.symbol,
+                            { highPriority: !s.highPriority },
+                            `${s.highPriority ? "Removed high priority" : "Marked high priority"} for ${s.symbol}.`,
+                          )
+                        }
+                      >
+                        {s.highPriority ? "Priority off" : "High priority"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] disabled:opacity-50"
+                        disabled={watchlistBusy}
+                        onClick={() =>
+                          void setSymbolPreference(
+                            s.symbol,
+                            { muted: !s.muted },
+                            `${s.muted ? "Unmuted" : "Muted"} ${s.symbol}.`,
+                          )
+                        }
+                      >
+                        {s.muted ? "Unmute" : "Mute"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] text-rose-200 disabled:opacity-50"
+                        disabled={watchlistBusy || !selectedWatchlist}
+                        onClick={() =>
+                          void mutateWatchlist(
+                            {
+                              watchlistId: selectedWatchlist?.id,
+                              symbol: s.symbol,
+                              exchange: s.exchange,
+                            },
+                            { method: "DELETE", successNote: `Removed ${s.symbol} from watchlist.` },
+                          )
+                        }
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {WATCH_TAG_OPTIONS.map((tag) => {
+                      const active = s.tags.includes(tag);
+                      return (
+                        <button
+                          key={`${s.id}-tag-${tag}`}
+                          type="button"
+                          className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                            active
+                              ? "border-sky-400/50 bg-sky-500/20 text-sky-100"
+                              : "border-[var(--border)] text-[var(--muted)]"
+                          }`}
+                          disabled={watchlistBusy}
+                          onClick={() =>
+                            void setSymbolPreference(
+                              s.symbol,
+                              {
+                                tags: active
+                                  ? s.tags.filter((t) => t !== tag)
+                                  : [...new Set([...s.tags, tag])],
+                              },
+                              `Updated tags for ${s.symbol}.`,
+                            )
+                          }
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p>
+              Deep notification &amp; journal controls:{" "}
+              <Link href="/notifications" className="text-[var(--accent)] underline">
+                Notifications
+              </Link>
+              ,{" "}
+              <Link href="/strategy" className="text-[var(--accent)] underline">
+                Strategy settings
+              </Link>
+              ,{" "}
+              <Link href="/settings" className="text-[var(--accent)] underline">
+                Settings
+              </Link>
+              .
+            </p>
+          </div>
         </div>
       )}
 

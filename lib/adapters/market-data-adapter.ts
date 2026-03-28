@@ -27,6 +27,10 @@ function logRawQuote(vendor: string, symbol: string, label: string, payload: unk
   }
 }
 
+function isCryptoSymbol(symbol: string): boolean {
+  return symbol.includes(":");
+}
+
 /** Stock and index price data — abstracts Polygon, Finnhub, etc. */
 export interface MarketDataAdapter {
   getQuote(symbol: string, exchange?: string): Promise<Quote | null>;
@@ -185,6 +189,9 @@ export class PolygonPrimaryFinnhubFallbackMarketAdapter implements MarketDataAda
   ) {}
 
   async getQuote(symbol: string, exchange?: string): Promise<Quote | null> {
+    if (isCryptoSymbol(symbol)) {
+      return this.finnhub.getQuote(symbol, exchange ?? "CRYPTO");
+    }
     const q = await this.polygon.getQuote(symbol, exchange);
     if (!q) {
       const f = await this.finnhub.getQuote(symbol, exchange);
@@ -229,6 +236,10 @@ export class PolygonPrimaryFinnhubFallbackMarketAdapter implements MarketDataAda
     to: Date,
     exchange?: string,
   ): Promise<Candle[]> {
+    if (isCryptoSymbol(symbol)) {
+      return this.finnhub.getCandles(symbol, interval, from, to, exchange ?? "CRYPTO");
+    }
+    void exchange;
     const c = await this.polygon.getCandles(symbol, interval, from, to);
     if (c.length >= 5) return c;
     return this.finnhub.getCandles(symbol, interval, from, to);
@@ -244,6 +255,33 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
   constructor(private apiKey: string) {}
 
   async getQuote(symbol: string, exchange = "US"): Promise<Quote | null> {
+    if (isCryptoSymbol(symbol) || exchange === "CRYPTO") {
+      const toS = Math.floor(Date.now() / 1000);
+      const fromS = toS - 2 * 86400;
+      const url = `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(symbol)}&resolution=5&from=${fromS}&to=${toS}&token=${this.apiKey}`;
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const j = (await r.json()) as {
+        s?: string;
+        t?: number[];
+        c?: number[];
+        v?: number[];
+      };
+      if (j.s !== "ok" || !j.t?.length || !j.c?.length) return null;
+      const idx = j.c.length - 1;
+      const last = j.c[idx];
+      const volume = j.v?.[idx];
+      const t = j.t[idx];
+      if (last == null || last <= 0 || volume == null || volume <= 0) return null;
+      return {
+        symbol,
+        exchange: "CRYPTO",
+        last,
+        volume,
+        ts: t != null ? new Date(t * 1000).toISOString() : new Date().toISOString(),
+        source: "FINNHUB_CRYPTO",
+      };
+    }
     void exchange;
     const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${this.apiKey}`;
     const r = await fetch(url);
@@ -325,7 +363,42 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
     interval: string,
     from: Date,
     to: Date,
+    exchange = "US",
   ): Promise<Candle[]> {
+    if (isCryptoSymbol(symbol) || exchange === "CRYPTO") {
+      const resolution =
+        interval === "1d" ? "D" : interval === "1h" ? "60" : "60";
+      const fromS = Math.floor(from.getTime() / 1000);
+      const toS = Math.floor(to.getTime() / 1000);
+      const url = `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&from=${fromS}&to=${toS}&token=${this.apiKey}`;
+      const r = await fetch(url);
+      if (!r.ok) return [];
+      const j = (await r.json()) as {
+        s?: string;
+        t?: number[];
+        o?: number[];
+        h?: number[];
+        l?: number[];
+        c?: number[];
+        v?: number[];
+      };
+      if (j.s !== "ok" || !j.t?.length) return [];
+      const out: Candle[] = [];
+      for (let i = 0; i < j.t.length; i++) {
+        out.push({
+          symbol,
+          interval,
+          t: new Date(j.t[i]! * 1000).toISOString(),
+          o: j.o![i]!,
+          h: j.h![i]!,
+          l: j.l![i]!,
+          c: j.c![i]!,
+          v: j.v![i] ?? 0,
+          source: "FINNHUB_CRYPTO",
+        });
+      }
+      return out;
+    }
     const resolution =
       interval === "1d" ? "D" : interval === "1h" ? "60" : "60";
     const fromS = Math.floor(from.getTime() / 1000);
@@ -361,6 +434,9 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
   }
 
   async getFundamentals(symbol: string): Promise<FundamentalSnapshot | null> {
+    if (isCryptoSymbol(symbol)) {
+      return { symbol, sector: "DIGITAL_ASSET", source: "FINNHUB_CRYPTO" };
+    }
     const url = `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${this.apiKey}`;
     const r = await fetch(url);
     if (!r.ok) return null;
@@ -371,13 +447,23 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
         debtEquityAnnual?: number;
       };
     };
+    let sector: string | undefined;
+    const profileUrl = `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(symbol)}&token=${this.apiKey}`;
+    const profileRes = await fetch(profileUrl);
+    if (profileRes.ok) {
+      const profile = (await profileRes.json()) as { finnhubIndustry?: unknown };
+      if (typeof profile.finnhubIndustry === "string" && profile.finnhubIndustry.trim()) {
+        sector = profile.finnhubIndustry.trim();
+      }
+    }
     const m = j.metric;
-    if (!m) return { symbol, source: "FINNHUB" };
+    if (!m) return { symbol, sector, source: "FINNHUB" };
     return {
       symbol,
       pe: m.peNormalizedAnnual,
       marketCap: m.marketCapitalization,
       debtToEquity: m.debtEquityAnnual,
+      sector,
       source: "FINNHUB",
     };
   }

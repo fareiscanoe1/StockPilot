@@ -126,6 +126,7 @@ export interface ProviderSnapshotJson {
     pe?: number;
     market_cap?: number;
     debt_to_equity?: number;
+    sector?: string;
     source: string | null;
   } | null;
   earnings: {
@@ -254,6 +255,7 @@ export function buildProviderSnapshot(input: {
           pe: input.fundamentals.pe,
           market_cap: input.fundamentals.marketCap,
           debt_to_equity: input.fundamentals.debtToEquity,
+          sector: input.fundamentals.sector,
           source: input.fundamentals.source,
         }
       : null,

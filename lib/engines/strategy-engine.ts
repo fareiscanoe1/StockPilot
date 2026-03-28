@@ -116,6 +116,10 @@ function trendFromCandles(closes: number[]): number {
   return Math.max(0.35, Math.min(0.75, 0.5 + r * 3));
 }
 
+function clampRange(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
 /** Tight option filters: NBBO, spread, OI, contract volume, DTE window. */
 function pickQualifiedOption(
   chain: OptionChain,
@@ -769,6 +773,38 @@ export class StrictStrategyEngine {
         assetType,
       });
 
+      const trendStrengthScore = Math.round(clampRange(technicalTrend * 100, 0, 100));
+      const liquidityVolumeFactor = Math.min(1, Math.log10(1 + quote.volume! / 500_000));
+      const liquiditySpreadFactor = nbboObserved
+        ? clampRange(1 - spreadPct / Math.max(3, this.risk.params().maxBidAskSpreadPct * 1.5), 0, 1)
+        : 0.45;
+      const liquidityQualityScore = Math.round(
+        clampRange(
+          (nbboObserved ? 0.45 : 0.28) * 100 + liquidityVolumeFactor * 34 + liquiditySpreadFactor * 21,
+          0,
+          100,
+        ),
+      );
+      const eventEdgeScore = Math.round(
+        clampRange(
+          isEarn && daysUntilEarnings != null && daysUntilEarnings >= 0
+            ? 62 + Math.max(0, 18 - daysUntilEarnings * 2)
+            : 42 + trendStrengthScore * 0.16,
+          0,
+          100,
+        ),
+      );
+      const historicalPatternQuality = Math.round(
+        clampRange(
+          trendStrengthScore * 0.62 + liquidityQualityScore * 0.2 + (isEarn ? 10 : 0) + (fundFromVendor ? 8 : 0),
+          0,
+          100,
+        ),
+      );
+      const rewardRiskEstimate = Number(
+        clampRange((ai.output.confidence + Math.max(0.2, 10 - ai.output.risk_score)) / 7.5, 0.2, 3.2).toFixed(2),
+      );
+
       const candidate: StrategyCandidate = {
         symbol,
         exchange: quote.exchange,
@@ -798,6 +834,11 @@ export class StrictStrategyEngine {
           stockBidAskSource: quote.bidAskSource ?? null,
           spreadPct,
           volume: quote.volume,
+          trendStrengthScore,
+          liquidityQualityScore,
+          historicalPatternQuality,
+          eventEdgeScore,
+          rewardRiskEstimate,
           provenance: {
             quotes: quote.source,
             candles: candles[0]?.source ?? quote.source,
@@ -810,6 +851,7 @@ export class StrictStrategyEngine {
             reasoning: "OPENAI",
           },
           fundamentalsFromVendor: fundFromVendor,
+          sector: fundamentals?.sector ?? null,
           newsSkipped,
           openaiModel: model,
           openaiRationale: ai.output.rationale,

@@ -11,14 +11,17 @@ import { parseCommanderFromCustomRules } from "@/lib/commander/prefs";
 import { CommanderClient } from "@/components/commander/CommanderClient";
 import type { NewsArticle } from "@/lib/adapters/types";
 import { getCommanderOperatorBootstrap } from "@/lib/commander/operator-queries";
+import { ensureDefaultWatchlists } from "@/lib/watchlist/defaults";
+import { findManySymbolPreferences } from "@/lib/symbol-preferences";
 
 export default async function CommanderPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/sign-in?callbackUrl=/commander");
 
   const userId = session.user.id;
+  await ensureDefaultWatchlists(userId);
 
-  const [profile, notifyPrefs, accounts, alerts, earn, watchSyms] = await Promise.all([
+  const [profile, notifyPrefs, accounts, alerts, earn, watchlists, symbolPrefs] = await Promise.all([
     prisma.strategyProfile.findUnique({ where: { userId } }),
     prisma.notificationPreference.findUnique({ where: { userId } }),
     prisma.virtualAccount.findMany({
@@ -35,9 +38,12 @@ export default async function CommanderPage() {
       orderBy: { datetimeUtc: "asc" },
       take: 10,
     }),
-    prisma.watchlistSymbol.findMany({
-      where: { watchlist: { userId } },
+    prisma.watchlist.findMany({
+      where: { userId },
+      include: { symbols: true },
+      orderBy: { name: "asc" },
     }),
+    findManySymbolPreferences(userId),
   ]);
 
   const mode = profile?.mode ?? "BALANCED";
@@ -46,14 +52,30 @@ export default async function CommanderPage() {
   const providers = getResolvedStrictProviders();
   const market = providers.market;
   const marks: Record<string, number> = {};
-  const watchlistFlat = Array.from(new Set(watchSyms.map((w) => w.symbol)));
+  const prefBySymbol = new Map(
+    symbolPrefs.map((p) => [
+      `${p.symbol}:${p.exchange}`.toUpperCase(),
+      {
+        pinned: p.pinned,
+        highPriority: p.highPriority,
+        muted: p.muted,
+        ignored: p.ignored,
+        tags: p.tags.map((t) => t.toLowerCase()),
+      },
+    ]),
+  );
+  const watchlistFlat = Array.from(
+    new Set(
+      watchlists.flatMap((w) => w.symbols.map((s) => s.symbol.trim().toUpperCase()).filter(Boolean)),
+    ),
+  );
   const holdingsUniverse = Array.from(
     new Set(accounts.flatMap((a) => a.holdings.map((h) => h.symbol))),
   );
   const trendSymbols = (watchlistFlat.length ? watchlistFlat : holdingsUniverse).slice(0, 6);
   const symbols = new Set<string>();
   accounts.forEach((a) => a.holdings.forEach((h) => symbols.add(h.symbol)));
-  watchSyms.forEach((w) => symbols.add(w.symbol));
+  watchlists.forEach((w) => w.symbols.forEach((s) => symbols.add(s.symbol)));
   trendSymbols.forEach((s) => symbols.add(s));
   if (market) {
     for (const s of symbols) {
@@ -158,6 +180,26 @@ export default async function CommanderPage() {
       }))}
       earnings={earningsSerialized}
       watchlist={watchlistFlat}
+      watchlists={watchlists.map((w) => ({
+        id: w.id,
+        name: w.name,
+        symbols: w.symbols.map((s) => {
+          const pref =
+            prefBySymbol.get(`${s.symbol}:${s.exchange}`.toUpperCase()) ??
+            prefBySymbol.get(`${s.symbol}:US`.toUpperCase()) ??
+            null;
+          return {
+            id: s.id,
+            symbol: s.symbol,
+            exchange: s.exchange,
+            pinned: pref?.pinned ?? false,
+            highPriority: pref?.highPriority ?? false,
+            muted: pref?.muted ?? false,
+            ignored: pref?.ignored ?? false,
+            tags: pref?.tags ?? [],
+          };
+        }),
+      }))}
       watchQuotes={watchlistFlat.map((s) => ({ symbol: s, last: marks[s] ?? null }))}
       watchTrends={watchTrends}
       liveNews={newsRows.map((n) => ({

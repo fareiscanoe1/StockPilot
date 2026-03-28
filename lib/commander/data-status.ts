@@ -34,9 +34,15 @@ export function panelRealDataStatus(
       }
       return { status: "real", detail: stack.reasoning };
     case "crypto":
+      if (stack.quotes === "unavailable" || stack.candles === "unavailable") {
+        return {
+          status: "blocked",
+          detail: `Crypto discovery requires quotes+candles. Quotes: ${stack.quotes}; candles: ${stack.candles}`,
+        };
+      }
       return {
-        status: "blocked",
-        detail: "No crypto market-data adapter in STRICT stack — enable only when wired.",
+        status: "real",
+        detail: `Strict crypto path via ${stack.quotes} quotes and ${stack.candles} candles`,
       };
     default:
       return { status: "blocked", detail: "Unknown panel." };

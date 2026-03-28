@@ -6,12 +6,17 @@ import { PortfolioSimulator } from "./portfolio-simulator";
 import { AlertEngine } from "./alert-engine";
 import { TradeJournal } from "./trade-journal";
 import { SimulatedAction } from "@prisma/client";
+import { parseCommanderFromCustomRules } from "@/lib/commander/prefs";
+import { buildDiscoveryUniverse, sanitizeSymbolList } from "@/lib/commander/discovery-universe";
+import { ensureDefaultWatchlists } from "@/lib/watchlist/defaults";
+import { findManySymbolPreferences } from "@/lib/symbol-preferences";
 
 /** Called from API cron / worker — runs one scan cycle per virtual account. */
 export class ScanRunner {
   async runForUser(userId: string) {
     const profile = await prisma.strategyProfile.findUnique({ where: { userId } });
     const mode = profile?.mode ?? "BALANCED";
+    const commanderPrefs = parseCommanderFromCustomRules(profile?.customRules, mode);
     const riskOverrides = profile?.riskParams as object | undefined;
 
     const providers = getResolvedStrictProviders();
@@ -26,14 +31,48 @@ export class ScanRunner {
       where: { userId },
       include: { holdings: true },
     });
+    await ensureDefaultWatchlists(userId);
     const watch = await prisma.watchlistSymbol.findMany({
       where: { watchlist: { userId } },
     });
-    const symbols = [...new Set(watch.map((w) => w.symbol))];
-    const holdingSymbols = [
-      ...new Set(accounts.flatMap((a) => a.holdings.map((h) => h.symbol))),
+    const symbolPrefs = await findManySymbolPreferences(userId);
+    const mutedOrIgnored = new Set(
+      symbolPrefs
+        .filter((p) => p.muted || p.ignored)
+        .map((p) => p.symbol.trim().toUpperCase()),
+    );
+    const symbols = [
+      ...new Set(
+        watch
+          .map((w) => w.symbol.trim().toUpperCase())
+          .filter((sym) => sym && !mutedOrIgnored.has(sym)),
+      ),
     ];
-    const universe = symbols.length > 0 ? symbols : holdingSymbols;
+    const holdingSymbols = [
+      ...new Set(
+        accounts
+          .flatMap((a) => a.holdings.map((h) => h.symbol.trim().toUpperCase()))
+          .filter(Boolean),
+      ),
+    ];
+    const discoverySymbols = buildDiscoveryUniverse({
+      primaryMode: commanderPrefs.primaryMode,
+      size: commanderPrefs.discoveryUniverseSize,
+      optionsEnabled: commanderPrefs.toggles.optionsEnabled,
+      cryptoEnabled: commanderPrefs.toggles.cryptoEnabled,
+    }).filter((sym) => !mutedOrIgnored.has(sym));
+    const customSymbols = sanitizeSymbolList(commanderPrefs.customUniverseSymbols ?? []).filter(
+      (sym) => !mutedOrIgnored.has(sym),
+    );
+    const universe =
+      commanderPrefs.universeMode === "WATCHLIST_ONLY"
+        ? symbols
+        : commanderPrefs.universeMode === "AI_DISCOVERY_ONLY"
+          ? discoverySymbols
+          : commanderPrefs.universeMode === "CUSTOM_UNIVERSE"
+            ? customSymbols
+            : [...new Set([...symbols, ...discoverySymbols])];
+    const finalUniverse = universe.length ? universe : holdingSymbols;
 
     if (providers.stack.warnings.length) {
       console.warn(
@@ -41,9 +80,9 @@ export class ScanRunner {
         providers.stack.warnings.join(" | "),
       );
     }
-    if (!universe.length) {
+    if (!finalUniverse.length) {
       console.warn(
-        "[STRICT] ScanRunner: no watchlist/holding symbols configured; skipping scan cycle for user",
+        "[STRICT] ScanRunner: no symbols configured for selected universe mode; skipping user",
         userId,
       );
       return;
@@ -56,7 +95,9 @@ export class ScanRunner {
 
     for (const acc of accounts) {
       const marks: Record<string, number> = {};
-      const markSymbols = [...new Set([...universe, ...acc.holdings.map((h) => h.symbol)])];
+      const markSymbols = [
+        ...new Set([...finalUniverse, ...acc.holdings.map((h) => h.symbol.trim().toUpperCase())]),
+      ];
       if (providers.market) {
         for (const s of markSymbols) {
           const q = await providers.market.getQuote(s);
@@ -71,7 +112,7 @@ export class ScanRunner {
       if (!risk.heatOk(gross, pv)) continue;
 
       const { candidates, decisions } = await strategy.scanUniverse(
-        universe,
+        finalUniverse,
         pv,
         acc.subPortfolio,
       );

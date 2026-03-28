@@ -63,6 +63,7 @@ export interface FundamentalSnapshot {
   pe?: number;
   marketCap?: number;
   debtToEquity?: number;
+  sector?: string;
   source: string;
 }
 
