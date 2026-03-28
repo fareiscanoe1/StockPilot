@@ -45,7 +45,7 @@ export default async function HistoryPage() {
           </tbody>
         </table>
         {orders.length === 0 && (
-          <p className="p-4 text-sm text-[var(--muted)]">No simulated orders yet.</p>
+          <p className="p-4 text-sm text-[var(--muted)]">No orders yet.</p>
         )}
       </div>
     </div>

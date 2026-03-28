@@ -18,11 +18,10 @@ export default async function SettingsPage() {
           <strong className="text-foreground">DATA_PROVIDER:</strong> {env.DATA_PROVIDER}
         </p>
         <p className="text-xs">
-          The app runs in <strong className="text-foreground">STRICT</strong> real-data mode
-          only. Missing API keys disable the related features; nothing downgrades to mock market
-          data.
+          <strong className="text-foreground">STRICT</strong> mode: live vendor APIs only. Missing
+          keys disable that feature until configured.
         </p>
-        <ProviderStackPanel stack={stack} title="Resolved provider stack" />
+        <ProviderStackPanel stack={stack} title="Resolved stack" />
         <p>
           Database URL configured: <code className="text-xs">{Boolean(env.DATABASE_URL)}</code>
         </p>

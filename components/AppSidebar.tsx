@@ -9,12 +9,13 @@ const links = [
   { href: "/scanner", label: "Market scanner" },
   { href: "/earnings", label: "Earnings calendar" },
   { href: "/options", label: "Options opportunities" },
-  { href: "/portfolio", label: "Simulated portfolio" },
+  { href: "/portfolio", label: "Portfolio" },
   { href: "/positions", label: "Open positions" },
   { href: "/history", label: "Trade history" },
   { href: "/rationale", label: "AI rationale" },
   { href: "/analytics", label: "Performance analytics" },
   { href: "/watchlist", label: "Watchlist" },
+  { href: "/strategy-views", label: "Strategy views" },
   { href: "/strategy", label: "Strategy settings" },
   { href: "/notifications", label: "Notifications" },
   { href: "/settings", label: "Settings" },
@@ -29,7 +30,7 @@ export function AppSidebar() {
           Earnings Pilot AI
         </Link>
         <p className="mt-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">
-          Paper desk · sandbox
+          Paper desk
         </p>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5 text-sm">

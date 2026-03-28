@@ -40,12 +40,3 @@ body {
   border-radius: 14px;
 }
 
-.pill-sim {
-  font-size: 0.65rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 0.15rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid var(--warn);
-  color: var(--warn);
-}

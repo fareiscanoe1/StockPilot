@@ -1,5 +1,32 @@
 import type { Candle, FundamentalSnapshot, Quote } from "./types";
 
+const RAW_QUOTE_LOG = new Set(
+  (process.env.MARKET_QUOTE_RAW_LOG_SYMBOLS ?? "AAPL,MSFT,NVDA")
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean),
+);
+
+/** Polygon SIP timestamps are often nanoseconds; ms Unix times are ~1e12–1e13. */
+function polygonTimeToIso(t: number | undefined): string {
+  if (t == null || !Number.isFinite(t)) return new Date().toISOString();
+  const ms = t > 1e15 ? Math.floor(t / 1e6) : t;
+  return new Date(ms).toISOString();
+}
+
+function logRawQuote(vendor: string, symbol: string, label: string, payload: unknown) {
+  if (!RAW_QUOTE_LOG.has(symbol.toUpperCase())) return;
+  try {
+    const j = JSON.stringify(payload);
+    const cap = 4500;
+    console.warn(
+      `[QuoteRaw] ${vendor} ${symbol} ${label} (${j.length}b): ${j.slice(0, cap)}${j.length > cap ? "…" : ""}`,
+    );
+  } catch {
+    console.warn(`[QuoteRaw] ${vendor} ${symbol} ${label}: <serialize error>`);
+  }
+}
+
 /** Stock and index price data — abstracts Polygon, Finnhub, etc. */
 export interface MarketDataAdapter {
   getQuote(symbol: string, exchange?: string): Promise<Quote | null>;
@@ -21,17 +48,40 @@ export class PolygonMarketDataAdapter implements MarketDataAdapter {
     const sym = exchange === "US" ? symbol : symbol;
     const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${sym}?apiKey=${this.apiKey}`;
     const r = await fetch(url);
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.warn(`[Polygon] snapshot ${sym} failed: HTTP ${r.status}`);
+      return null;
+    }
     const j = (await r.json()) as {
       ticker?: {
         lastTrade?: { p?: number; t?: number };
         lastQuote?: { p?: number; P?: number };
-        day?: { v?: number };
+        last_quote?: { p?: number; P?: number };
+        day?: { c?: number; v?: number; h?: number; l?: number; o?: number };
+        prevDay?: { c?: number; v?: number };
       };
     };
+    logRawQuote("POLYGON", sym, "v2/snapshot/stocks/tickers", j);
     const t = j.ticker;
-    if (!t?.lastTrade?.p) return null;
+    if (!t) {
+      console.warn(`[Polygon] ${sym}: snapshot JSON missing ticker object`);
+      return null;
+    }
+
+    // lastTrade is often absent after hours / delayed feeds; day.c and prevDay.c are still Polygon data
+    const last =
+      t.lastTrade?.p ??
+      (t.day?.c != null && t.day.c > 0 ? t.day.c : undefined) ??
+      (t.prevDay?.c != null && t.prevDay.c > 0 ? t.prevDay.c : undefined);
+    if (last == null || last <= 0) {
+      console.warn(`[Polygon] ${sym}: no last price in snapshot (no trade/day/prevDay close)`);
+      return null;
+    }
+
     let volume = t.day?.v;
+    if ((volume == null || volume <= 0) && t.prevDay?.v != null && t.prevDay.v > 0) {
+      volume = t.prevDay.v;
+    }
     if (volume == null || volume <= 0) {
       const toS = Math.floor(Date.now() / 1000);
       const fromS = toS - 10 * 86400;
@@ -42,21 +92,49 @@ export class PolygonMarketDataAdapter implements MarketDataAdapter {
         volume = j2.results?.[0]?.v;
       }
     }
-    const last = t.lastTrade.p;
-    const lq = t.lastQuote;
-    const bid = lq?.p;
-    const ask = lq?.P;
-    return {
+
+    const lq = t.lastQuote ?? t.last_quote;
+    let bid = lq?.p;
+    let ask = lq?.P;
+    let bidAskSource: Quote["bidAskSource"] | undefined =
+      bid != null && ask != null && bid > 0 && ask >= bid ? "POLYGON_SNAPSHOT" : undefined;
+
+    if (bid == null || ask == null || bid <= 0 || ask < bid) {
+      /** Correct NBBO path (Polygon docs); legacy `/v2/last/quote/stocks/…` 404s on current API. */
+      const nbboUrl = `https://api.polygon.io/v2/last/nbbo/${encodeURIComponent(sym)}?apiKey=${this.apiKey}`;
+      const qr = await fetch(nbboUrl);
+      const qj = (await qr.json().catch(() => ({}))) as {
+        results?: { p?: number; P?: number };
+        status?: string;
+      };
+      logRawQuote("POLYGON", sym, "v2/last/nbbo", qj);
+      if (qr.ok) {
+        const rq = qj.results;
+        if (rq?.p != null && rq.P != null && rq.p > 0 && rq.P >= rq.p) {
+          bid = rq.p;
+          ask = rq.P;
+          bidAskSource = "POLYGON_NBBO";
+        }
+      } else {
+        console.warn(`[Polygon] ${sym}: NBBO endpoint HTTP ${qr.status}`);
+      }
+    }
+
+    const hasNbbo = bid != null && ask != null && bid > 0 && ask >= bid;
+    const out: Quote = {
       symbol: sym,
       exchange: "US",
       last,
-      ...(bid != null && ask != null && bid > 0 && ask >= bid ? { bid, ask } : {}),
       volume,
-      ts: t.lastTrade.t
-        ? new Date(t.lastTrade.t).toISOString()
-        : new Date().toISOString(),
+      ts: polygonTimeToIso(t.lastTrade?.t),
       source: "POLYGON",
     };
+    if (hasNbbo) {
+      out.bid = bid;
+      out.ask = ask;
+      out.bidAskSource = bidAskSource;
+    }
+    return out;
   }
 
   async getCandles(
@@ -96,6 +174,71 @@ export class PolygonMarketDataAdapter implements MarketDataAdapter {
   }
 }
 
+/**
+ * Both keys set: prefer Polygon (aligns with options chain source), but if snapshot/quote
+ * is empty (tier, after-hours gaps, etc.) fall back to Finnhub — still real vendor data.
+ */
+export class PolygonPrimaryFinnhubFallbackMarketAdapter implements MarketDataAdapter {
+  constructor(
+    private polygon: PolygonMarketDataAdapter,
+    private finnhub: FinnhubMarketDataAdapter,
+  ) {}
+
+  async getQuote(symbol: string, exchange?: string): Promise<Quote | null> {
+    const q = await this.polygon.getQuote(symbol, exchange);
+    if (!q) {
+      const f = await this.finnhub.getQuote(symbol, exchange);
+      if (f) {
+        console.warn(
+          `[STRICT] ${symbol}: Polygon returned no quote — using Finnhub (check Polygon tier / market hours).`,
+        );
+      }
+      return f;
+    }
+    const needNbbo =
+      q.bid == null ||
+      q.ask == null ||
+      q.bid <= 0 ||
+      q.ask < q.bid;
+    if (!needNbbo) return q;
+
+    const f = await this.finnhub.getQuote(symbol, exchange);
+    if (
+      f?.bid != null &&
+      f?.ask != null &&
+      f.bid > 0 &&
+      f.ask >= f.bid
+    ) {
+      console.warn(
+        `[STRICT] ${symbol}: Polygon quote without NBBO — merged Finnhub bid/ask.`,
+      );
+      return {
+        ...q,
+        bid: f.bid,
+        ask: f.ask,
+        bidAskSource: "FINNHUB_BIDASK",
+      };
+    }
+    return q;
+  }
+
+  async getCandles(
+    symbol: string,
+    interval: string,
+    from: Date,
+    to: Date,
+    exchange?: string,
+  ): Promise<Candle[]> {
+    const c = await this.polygon.getCandles(symbol, interval, from, to);
+    if (c.length >= 5) return c;
+    return this.finnhub.getCandles(symbol, interval, from, to);
+  }
+
+  async getFundamentals(symbol: string): Promise<FundamentalSnapshot | null> {
+    return this.finnhub.getFundamentals(symbol);
+  }
+}
+
 /** Finnhub quote + daily candles + metric snapshot — works when Polygon is unavailable. */
 export class FinnhubMarketDataAdapter implements MarketDataAdapter {
   constructor(private apiKey: string) {}
@@ -106,6 +249,7 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
     const r = await fetch(url);
     if (!r.ok) return null;
     const j = (await r.json()) as { c?: number; t?: number; pc?: number };
+    logRawQuote("FINNHUB", symbol, "v1/quote", j);
     if (j.c == null || j.c === 0) return null;
 
     let volume: number | undefined;
@@ -128,6 +272,7 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
         bidPrice?: number[];
         askPrice?: number[];
       };
+      logRawQuote("FINNHUB", symbol, "v1/stock/bidask", bj);
       if (
         bj.s === "ok" &&
         bj.bidPrice?.length &&
@@ -140,15 +285,20 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
       }
     }
 
-    return {
+    const qOut: Quote = {
       symbol,
       exchange: symbol.includes(".") ? "CA" : "US",
       last: j.c,
-      ...(bid != null && ask != null ? { bid, ask } : {}),
       volume,
       ts: j.t ? new Date(j.t * 1000).toISOString() : new Date().toISOString(),
       source: "FINNHUB",
     };
+    if (bid != null && ask != null) {
+      qOut.bid = bid;
+      qOut.ask = ask;
+      qOut.bidAskSource = "FINNHUB_BIDASK";
+    }
+    return qOut;
   }
 
   async getCandles(

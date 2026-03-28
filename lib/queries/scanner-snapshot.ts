@@ -3,11 +3,48 @@ import {
   getDataStackSummary,
   getResolvedStrictProviders,
 } from "@/lib/adapters/provider-factory";
+import {
+  fetchSymbolQuoteDiagnostics,
+  type SymbolQuoteDiagnostics,
+} from "@/lib/adapters/quote-diagnostics";
 import { RiskEngine } from "@/lib/engines/risk-engine";
-import { StrictStrategyEngine } from "@/lib/engines/strategy-engine";
+import {
+  StrictStrategyEngine,
+  type UniverseScanMeta,
+} from "@/lib/engines/strategy-engine";
 import { PortfolioSimulator } from "@/lib/engines/portfolio-simulator";
+import type { ScanTelemetryFn } from "@/lib/scan/types";
+import type { StrategyMode } from "@prisma/client";
 
-export async function getScannerSnapshot(userId: string) {
+export type ScannerSnapshot = {
+  simulatedOnly: true;
+  mode: StrategyMode;
+  universe: string[];
+  portfolioValue: number;
+  candidates: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["candidates"];
+  stockCandidates: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["stockCandidates"];
+  optionCandidates: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["optionCandidates"];
+  decisions: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["decisions"];
+  scanMeta: UniverseScanMeta;
+  dataSources: ReturnType<typeof getDataStackSummary>;
+  quoteDiagnostics?: SymbolQuoteDiagnostics[];
+  minTradeAlertConfidence: number | null;
+  alertsHighConvictionOnly: boolean;
+};
+
+export type ExecuteScannerSnapshotInput = {
+  userId: string;
+  /** When set, scan only this symbol (e.g. options page). */
+  symbol?: string | null;
+  includeQuoteDiagnostics?: boolean;
+  telemetry?: ScanTelemetryFn;
+};
+
+export async function executeScannerSnapshot(
+  input: ExecuteScannerSnapshotInput,
+): Promise<ScannerSnapshot> {
+  const { userId, symbol, includeQuoteDiagnostics, telemetry } = input;
+
   const profile = await prisma.strategyProfile.findUnique({
     where: { userId },
   });
@@ -16,11 +53,24 @@ export async function getScannerSnapshot(userId: string) {
   const risk = new RiskEngine(mode, profile?.riskParams as object | undefined);
   const engine = new StrictStrategyEngine(mode, providers, risk);
 
+  const notifyPrefs = await prisma.notificationPreference.findUnique({
+    where: { userId },
+  });
+  const minTradeAlertConfidence =
+    notifyPrefs?.minTradeAlertConfidence != null
+      ? Number(notifyPrefs.minTradeAlertConfidence)
+      : null;
+  const alertsHighConvictionOnly = notifyPrefs?.alertsHighConvictionOnly === true;
+
   const watch = await prisma.watchlistSymbol.findMany({
     where: { watchlist: { userId } },
   });
-  const universe =
-    watch.length > 0 ? watch.map((w) => w.symbol) : ["AAPL", "MSFT", "NVDA", "AMD", "META"];
+  const trimmed = symbol?.trim();
+  const universe = trimmed?.length
+    ? [trimmed.toUpperCase()]
+    : watch.length > 0
+      ? watch.map((w) => w.symbol)
+      : ["AAPL", "MSFT", "NVDA", "AMD", "META"];
 
   const acc = await prisma.virtualAccount.findFirst({ where: { userId } });
   const marks: Record<string, number> = {};
@@ -31,11 +81,44 @@ export async function getScannerSnapshot(userId: string) {
     }
   }
   const pv = acc ? await PortfolioSimulator.portfolioValue(acc.id, marks) : 100_000;
-  const { candidates, decisions } = await engine.scanUniverse(
+
+  telemetry?.({
+    type: "scan_begin",
+    symbols: universe,
+    alertPrefs: {
+      minTradeAlertConfidence,
+      alertsHighConvictionOnly,
+    },
+  });
+  for (const s of universe) {
+    telemetry?.({ type: "symbol_progress", symbol: s, phase: "queued" });
+  }
+
+  const {
+    candidates,
+    stockCandidates,
+    optionCandidates,
+    decisions,
+    scanMeta,
+  } = await engine.scanUniverse(
     universe,
     pv,
     acc?.subPortfolio ?? "SWING",
+    telemetry,
   );
+
+  let quoteDiagnostics: SymbolQuoteDiagnostics[] | undefined;
+  if (includeQuoteDiagnostics) {
+    const poly = process.env.POLYGON_API_KEY;
+    const finn = process.env.FINNHUB_API_KEY;
+    const sample = universe.slice(0, 5);
+    quoteDiagnostics = await Promise.all(
+      sample.map(async (sym) => {
+        const norm = providers.market ? await providers.market.getQuote(sym) : null;
+        return fetchSymbolQuoteDiagnostics(sym, poly, finn, norm);
+      }),
+    );
+  }
 
   return {
     simulatedOnly: true as const,
@@ -43,7 +126,23 @@ export async function getScannerSnapshot(userId: string) {
     universe,
     portfolioValue: pv,
     candidates,
+    stockCandidates,
+    optionCandidates,
     decisions,
+    scanMeta,
     dataSources: getDataStackSummary(providers.stack),
+    quoteDiagnostics,
+    minTradeAlertConfidence,
+    alertsHighConvictionOnly,
   };
+}
+
+export async function getScannerSnapshot(
+  userId: string,
+  opts?: { includeQuoteDiagnostics?: boolean },
+) {
+  return executeScannerSnapshot({
+    userId,
+    includeQuoteDiagnostics: opts?.includeQuoteDiagnostics,
+  });
 }

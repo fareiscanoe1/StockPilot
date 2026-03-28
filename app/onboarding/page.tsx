@@ -10,9 +10,8 @@ export default async function OnboardingPage() {
     <div className="mx-auto max-w-xl px-6 py-16">
       <h1 className="text-2xl font-semibold">Welcome aboard</h1>
       <p className="mt-3 text-sm text-[var(--muted)]">
-        Your virtual sub-portfolios and watchlist are seeded. Nothing here
-        connects to Wealthsimple, Interactive Brokers, or any other broker
-        unless you later add a read-only official integration.
+        Your sub-portfolios and watchlist are seeded. This app does not connect to Wealthsimple,
+        Interactive Brokers, or other brokers unless you add a separate integration.
       </p>
       <ol className="mt-8 list-decimal space-y-3 pl-5 text-sm text-[var(--muted)]">
         <li>Review strategy mode under Strategy settings.</li>

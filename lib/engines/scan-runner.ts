@@ -18,6 +18,9 @@ export class ScanRunner {
     const risk = new RiskEngine(mode, riskOverrides as never);
     const strategy = new StrictStrategyEngine(mode, providers, risk);
     const alerter = new AlertEngine();
+    const notifyPrefs = await prisma.notificationPreference.findUnique({
+      where: { userId },
+    });
 
     const accounts = await prisma.virtualAccount.findMany({ where: { userId } });
     const watch = await prisma.watchlistSymbol.findMany({
@@ -65,6 +68,12 @@ export class ScanRunner {
         acc.subPortfolio,
       );
 
+      const minConf =
+        notifyPrefs?.minTradeAlertConfidence != null
+          ? Number(notifyPrefs.minTradeAlertConfidence)
+          : null;
+      const requireHighConviction = notifyPrefs?.alertsHighConvictionOnly === true;
+
       for (const d of decisions) {
         const candidate =
           d.decision === "TRADE"
@@ -79,6 +88,9 @@ export class ScanRunner {
         (d) => d.ticker === top.symbol && d.decision === "TRADE",
       );
       if (!tradeOk) continue;
+
+      if (minConf != null && top.confidence < minConf) continue;
+      if (requireHighConviction && top.confidence < 7) continue;
 
       if (!providers.market) continue;
       const quote = await providers.market.getQuote(top.symbol);

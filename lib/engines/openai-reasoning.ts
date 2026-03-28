@@ -14,15 +14,32 @@ import type {
 import type { SymbolResearchContext } from "@/lib/adapters/research-adapter";
 import type { RiskParams } from "./risk-params";
 
-const openAiReasoningOutputSchema = z.object({
-  decision: z.enum(["TRADE", "NO_TRADE"]),
-  confidence: z.number(),
-  risk_score: z.number(),
-  thesis: z.string(),
-  invalidation: z.string(),
-  rationale: z.string(),
-  no_trade_reason: z.string(),
-});
+const openAiReasoningOutputSchema = z
+  .object({
+    decision: z.enum(["TRADE", "NO_TRADE"]),
+    confidence: z.number(),
+    risk_score: z.number(),
+    thesis: z.string(),
+    invalidation: z.string(),
+    rationale: z.string(),
+    no_trade_reason: z.string(),
+    /** Expected horizon in plain language, e.g. "5–15 trading days". */
+    holding_period_note: z.string(),
+    /** One-line catalyst / driver summary from snapshot only. */
+    catalyst_summary: z.string(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.decision === "NO_TRADE") {
+      const t = (data.no_trade_reason ?? "").trim();
+      if (t.length < 4) {
+        ctx.addIssue({
+          code: "custom",
+          message: "no_trade_reason must be explicit (min 4 chars) when decision is NO_TRADE",
+          path: ["no_trade_reason"],
+        });
+      }
+    }
+  });
 
 export type OpenAIReasoningOutput = z.infer<typeof openAiReasoningOutputSchema>;
 
@@ -48,7 +65,18 @@ export const TRADE_DECISION_JSON_SCHEMA = {
       },
       no_trade_reason: {
         type: "string",
-        description: "If NO_TRADE, brief reason code or text; empty string if TRADE.",
+        description:
+          "If NO_TRADE, explicit rationale (min ~1 sentence). Use empty string only when decision is TRADE.",
+      },
+      holding_period_note: {
+        type: "string",
+        description:
+          "Intended holding horizon in plain language from snapshot (e.g. 2–6 weeks). Required for both TRADE and NO_TRADE.",
+      },
+      catalyst_summary: {
+        type: "string",
+        description:
+          "Single concise line: main catalyst or risk driver from vendor data only (earnings, news, technicals, etc.).",
       },
     },
     required: [
@@ -59,6 +87,8 @@ export const TRADE_DECISION_JSON_SCHEMA = {
       "invalidation",
       "rationale",
       "no_trade_reason",
+      "holding_period_note",
+      "catalyst_summary",
     ],
     additionalProperties: false,
   },
@@ -81,6 +111,8 @@ export interface ProviderSnapshotJson {
     volume: number;
     ts: string;
     source: string;
+    /** True when bid/ask are from a live NBBO path; false when synthesized from last for context only. */
+    nbbo_observed: boolean;
   };
   candles_daily: {
     interval: string;
@@ -145,7 +177,10 @@ Rules:
 - You MUST NOT invent prices, volumes, dates, earnings times, option quotes, or news. If the snapshot is insufficient for a responsible idea, respond with decision "NO_TRADE".
 - Your output MUST match the JSON schema exactly. Ground thesis, rationale, invalidation, confidence, and risk_score strictly in the numbers and text provided.
 - open_web_research is supplemental context only — never treat it as exchange-verified market data.
-- confidence and risk_score are on a scale of 0–10 (decimals allowed).`;
+- confidence and risk_score are on a scale of 0–10 (decimals allowed).
+- Output MUST be JSON only matching the schema. No prose outside JSON.
+- For NO_TRADE, no_trade_reason MUST be a clear, user-readable explanation (never empty or generic).
+- holding_period_note and catalyst_summary are REQUIRED for every response — use "N/A" only if truly impossible from snapshot.`;
 
 export function buildProviderSnapshot(input: {
   symbol: string;
@@ -154,6 +189,7 @@ export function buildProviderSnapshot(input: {
   portfolioValue: number;
   provenance: Record<string, string | null>;
   quote: Quote;
+  underlyingNbboObserved: boolean;
   spreadPct: number;
   candles: Candle[];
   fundamentals: FundamentalSnapshot | null;
@@ -204,6 +240,7 @@ export function buildProviderSnapshot(input: {
       volume: input.quote.volume!,
       ts: input.quote.ts,
       source: input.quote.source,
+      nbbo_observed: input.underlyingNbboObserved,
     },
     candles_daily: {
       interval: input.candles[0]?.interval ?? "1d",
@@ -312,6 +349,8 @@ export async function runOpenAIReasoning(
         ...o,
         confidence: clamp01(o.confidence, 0, 10),
         risk_score: clamp01(o.risk_score, 0, 10),
+        holding_period_note: o.holding_period_note?.trim() || "See rationale",
+        catalyst_summary: o.catalyst_summary?.trim() || "See snapshot",
       },
       rawContent: content,
     };

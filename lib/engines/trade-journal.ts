@@ -11,6 +11,18 @@ export class TradeJournal {
     record: StrictDecisionRecord,
     candidate?: StrategyCandidate,
   ) {
+    if (
+      record.decision === "NO_TRADE" &&
+      record.reasonCode === "OPENAI_DECISION_NO_TRADE"
+    ) {
+      const prefs = await prisma.notificationPreference.findUnique({
+        where: { userId },
+      });
+      if (!prefs?.journalLogOpenAiNoTrade) {
+        return;
+      }
+    }
+
     const decision = record.decision === "TRADE" ? "TRADE" : "NO_TRADE";
     const assetType = candidate?.assetType ?? "STOCK";
     const confidence = candidate?.confidence ?? 0;

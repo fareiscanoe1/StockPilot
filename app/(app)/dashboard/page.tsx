@@ -54,19 +54,19 @@ export default async function DashboardPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Desk overview</h1>
         <p className="text-sm text-[var(--muted)]">
-          Aggregated virtual accounts — not connected to any live broker.
+          Your paper accounts — not linked to a live broker.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)]">Virtual equity (marked)</p>
+          <p className="text-xs text-[var(--muted)]">Equity (marked)</p>
           <p className="mt-1 text-2xl font-semibold">
             ${totalEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </p>
         </div>
         <div className="card p-4">
-          <p className="text-xs text-[var(--muted)]">Sandbox accounts</p>
+          <p className="text-xs text-[var(--muted)]">Accounts</p>
           <p className="mt-1 text-2xl font-semibold">{accounts.length}</p>
         </div>
         <div className="card p-4">
@@ -99,7 +99,7 @@ export default async function DashboardPage() {
             href="/portfolio"
             className="mt-3 inline-block text-xs text-[var(--accent)] hover:underline"
           >
-            Open simulated portfolio →
+            Open portfolio →
           </Link>
         </div>
         <div className="card p-4">
@@ -120,7 +120,7 @@ export default async function DashboardPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card space-y-3 p-4">
-          <ProviderStackPanel stack={dataStack} title="Data stack (desk + alerts)" />
+          <ProviderStackPanel stack={dataStack} title="Connected data" />
           <h2 className="text-sm font-medium text-[var(--muted)]">Latest AI actions</h2>
           <ul className="mt-3 space-y-2 text-xs text-[var(--muted)]">
             {alerts.map((a) => (

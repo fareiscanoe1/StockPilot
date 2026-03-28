@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Earnings Pilot AI — Simulated desk",
+  title: "Earnings Pilot AI — Paper desk",
   description:
-    "AI-assisted paper trading with virtual capital. No brokerage execution.",
+    "Paper trading with live market data. Research and alerts — no brokerage order routing.",
 };
 
 export default function RootLayout({

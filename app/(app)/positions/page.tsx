@@ -58,7 +58,7 @@ export default async function PositionsPage() {
           </tbody>
         </table>
         {rows.length === 0 && (
-          <p className="p-4 text-sm text-[var(--muted)]">No open simulated positions.</p>
+          <p className="p-4 text-sm text-[var(--muted)]">No open positions.</p>
         )}
       </div>
     </div>

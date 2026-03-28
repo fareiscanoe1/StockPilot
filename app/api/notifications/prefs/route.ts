@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import prisma from "@/lib/db";
 
@@ -29,6 +30,9 @@ export async function PUT(req: Request) {
     discordWebhookUrl: string | null;
     smsEnabled: boolean;
     smsTo: string | null;
+    minTradeAlertConfidence: number | null;
+    alertsHighConvictionOnly: boolean;
+    journalLogOpenAiNoTrade: boolean;
   }>;
 
   const prefs = await prisma.notificationPreference.upsert({
@@ -43,6 +47,12 @@ export async function PUT(req: Request) {
       discordWebhookUrl: body.discordWebhookUrl ?? null,
       smsEnabled: body.smsEnabled ?? false,
       smsTo: body.smsTo ?? null,
+      minTradeAlertConfidence:
+        body.minTradeAlertConfidence != null
+          ? new Prisma.Decimal(body.minTradeAlertConfidence)
+          : null,
+      alertsHighConvictionOnly: body.alertsHighConvictionOnly ?? false,
+      journalLogOpenAiNoTrade: body.journalLogOpenAiNoTrade ?? false,
     },
     update: {
       ...(body.inAppEnabled !== undefined && { inAppEnabled: body.inAppEnabled }),
@@ -55,6 +65,18 @@ export async function PUT(req: Request) {
       }),
       ...(body.smsEnabled !== undefined && { smsEnabled: body.smsEnabled }),
       ...(body.smsTo !== undefined && { smsTo: body.smsTo }),
+      ...(body.minTradeAlertConfidence !== undefined && {
+        minTradeAlertConfidence:
+          body.minTradeAlertConfidence == null
+            ? null
+            : new Prisma.Decimal(body.minTradeAlertConfidence),
+      }),
+      ...(body.alertsHighConvictionOnly !== undefined && {
+        alertsHighConvictionOnly: body.alertsHighConvictionOnly,
+      }),
+      ...(body.journalLogOpenAiNoTrade !== undefined && {
+        journalLogOpenAiNoTrade: body.journalLogOpenAiNoTrade,
+      }),
     },
   });
   return NextResponse.json({ prefs });

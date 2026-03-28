@@ -12,6 +12,8 @@ export interface Quote {
   ts: string; // ISO
   /** POLYGON | FINNHUB | etc. */
   source: string;
+  /** Where stock NBBO was obtained (options use chain strike bid/ask separately). */
+  bidAskSource?: "POLYGON_SNAPSHOT" | "POLYGON_NBBO" | "FINNHUB_BIDASK";
 }
 
 export interface Candle {

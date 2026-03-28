@@ -32,7 +32,7 @@ export class AlertEngine {
 
   async notifyTrade(userId: string, alert: TradeAlertBody) {
     const disclaimer =
-      "\n\n— Executed in virtual portfolio only. Not financial advice. Copy-manually at your own risk.\n— REAL DATA ONLY: no mock market data; verify all figures with your broker.";
+      "\n\n— Paper book only. Not financial advice. Verify prices with your broker before acting.";
 
     const provLines =
       alert.dataProvenance && Object.keys(alert.dataProvenance).length
@@ -45,7 +45,7 @@ export class AlertEngine {
         : [];
 
     const text = [
-      `SIMULATED ${alert.action}: ${alert.ticker} (${alert.assetType}) @ ${alert.entryPrice.toFixed(2)}`,
+      `PAPER ${alert.action}: ${alert.ticker} (${alert.assetType}) @ ${alert.entryPrice.toFixed(2)}`,
       `Size: ${alert.size} | Confidence ${alert.confidence.toFixed(1)}/10`,
       `Strategy: ${alert.strategyTag}`,
       alert.stopLoss != null ? `Stop: ${alert.stopLoss.toFixed(2)}` : "Stop: per risk profile",
@@ -60,7 +60,7 @@ export class AlertEngine {
     await prisma.alert.create({
       data: {
         userId,
-        title: `Simulated ${alert.action} ${alert.ticker}`,
+        title: `${alert.action} ${alert.ticker} (paper)`,
         body: text,
         payload: alert as unknown as object,
       },

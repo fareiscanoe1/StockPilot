@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import {
   FinnhubMarketDataAdapter,
   PolygonMarketDataAdapter,
+  PolygonPrimaryFinnhubFallbackMarketAdapter,
   type MarketDataAdapter,
 } from "./market-data-adapter";
 import { PolygonOptionsDataAdapter, type OptionsDataAdapter } from "./options-data-adapter";
@@ -53,7 +54,13 @@ export function resolveStrictProviders(): ResolvedStrictProviders {
   let quotesSource: QuotesSource = null;
   let market: MarketDataAdapter | null = null;
 
-  if (env.POLYGON_API_KEY) {
+  if (env.POLYGON_API_KEY && env.FINNHUB_API_KEY) {
+    market = new PolygonPrimaryFinnhubFallbackMarketAdapter(
+      new PolygonMarketDataAdapter(env.POLYGON_API_KEY),
+      new FinnhubMarketDataAdapter(env.FINNHUB_API_KEY),
+    );
+    quotesSource = "POLYGON";
+  } else if (env.POLYGON_API_KEY) {
     market = new PolygonMarketDataAdapter(env.POLYGON_API_KEY);
     quotesSource = "POLYGON";
   } else if (env.FINNHUB_API_KEY) {

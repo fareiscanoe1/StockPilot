@@ -2,7 +2,7 @@ import type { DataStackSummary } from "@/lib/adapters/provider-factory";
 
 export function ProviderStackPanel({
   stack,
-  title = "Active provider stack (STRICT)",
+  title = "Data providers",
 }: {
   stack: DataStackSummary;
   title?: string;
@@ -38,16 +38,12 @@ export function ProviderStackPanel({
         <div className="sm:col-span-2">
           Open-web research:{" "}
           <span className="text-foreground">{stack.webResearch}</span>
-          <span className="ml-1 text-[10px] opacity-80">
-            (supplemental context only — not market data)
-          </span>
+          <span className="ml-1 text-[10px] opacity-75">Optional context, not quotes</span>
         </div>
         <div className="sm:col-span-2">
           AI reasoning (OpenAI):{" "}
           <span className="text-foreground">{stack.reasoning}</span>
-          <span className="ml-1 text-[10px] opacity-80">
-            (structured JSON only — uses vendor snapshot below, never as quote source)
-          </span>
+          <span className="ml-1 text-[10px] opacity-75">Structured output on vendor facts</span>
         </div>
       </div>
       {stack.warnings.length > 0 && (

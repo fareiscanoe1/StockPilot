@@ -27,6 +27,7 @@ model User {
   alerts          Alert[]
   notifications   Notification[]
   recommendations RecommendationLog[]
+  signalOutcomeReviews SignalOutcomeReview[]
   backtestRuns         BacktestRun[]
   auditLogs            AuditLog[]
   notificationPrefs    NotificationPreference?
@@ -44,6 +45,12 @@ model NotificationPreference {
   smsEnabled         Boolean @default(false)
   /// Provider-specific “to” field; tokens belong in env — see README
   smsTo              String?
+  /// Minimum model confidence (0–10) to emit trade alerts; null = use engine default only
+  minTradeAlertConfidence Decimal? @db.Decimal(4, 2)
+  /// If true, only alert when confidence ≥ 7 (in addition to minTradeAlertConfidence)
+  alertsHighConvictionOnly Boolean @default(false)
+  /// When false, skip persisting OPENAI_DECISION_NO_TRADE rows to RecommendationLog (less journal noise)
+  journalLogOpenAiNoTrade Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -333,9 +340,30 @@ model RecommendationLog {
 
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   virtualAccount VirtualAccount? @relation(fields: [virtualAccountId], references: [id])
+  outcomeReview  SignalOutcomeReview?
 
   @@index([userId, createdAt])
   @@index([decision, createdAt])
+}
+
+/// Manual / batch-computed feedback: thesis vs price path — analytics only, not model training.
+model SignalOutcomeReview {
+  id              String   @id @default(cuid())
+  userId          String
+  recommendationLogId String @unique
+  ticker          String
+  horizonDays     Int      @default(5)
+  signalPrice     Decimal  @db.Decimal(20, 8)
+  markPrice       Decimal? @db.Decimal(20, 8)
+  returnPct       Decimal? @db.Decimal(10, 4)
+  thesisSnapshot  String?  @db.Text
+  outcomeNotes    String?  @db.Text
+  computedAt      DateTime @default(now())
+
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recLog RecommendationLog @relation(fields: [recommendationLogId], references: [id], onDelete: Cascade)
+
+  @@index([userId, computedAt])
 }
 
 model EarningsEvent {

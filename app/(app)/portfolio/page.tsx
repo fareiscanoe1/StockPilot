@@ -33,9 +33,9 @@ export default async function PortfolioPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Simulated portfolio</h1>
+      <h1 className="text-2xl font-semibold">Portfolio</h1>
       <p className="text-sm text-[var(--muted)]">
-        Separate virtual sub-books — starting cash you set via seed or API.
+        Sub-books with cash you seed — paper only.
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         {cards.map(({ a, equity }) => (
