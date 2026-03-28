@@ -31,8 +31,7 @@ earnings-pilot-ai/
 │   └── scan-runner.ts   # CLI entry for cron/systemd
 ├── docker-compose.yml
 ├── README.md
-├── SETUP.md
-└── .env.example
+└── SETUP.md
 ```
 
 ---
@@ -113,6 +112,12 @@ With **`DATA_PROVIDER=STRICT`** (required), the desk never uses mock or syntheti
 ## Quick start
 
 See **[SETUP.md](./SETUP.md)** for Docker Postgres, env vars, migrations/seed, cron, and provider keys.
+
+### Env files
+
+Create **`earnings-pilot-ai/.env`** (gitignored) with your API keys and any overrides. See **[SETUP.md](./SETUP.md)** for the variable list. Optional **`.env.local`** overrides **`.env`** for the same variable names — do not leave empty key lines in **`.env.local`** or they will clear values from **`.env`**.
+
+`DATABASE_URL`, `AUTH_SECRET`, and `DATA_PROVIDER` have defaults in code if omitted; add them to **`.env`** when you need non-defaults.
 
 Demo seed user: `demo@earningspilot.ai` / `demo-demo-demo`.
 

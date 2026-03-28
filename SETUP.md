@@ -36,18 +36,33 @@ Set `DATABASE_URL` to your connection string.
 
 ## 3. Environment variables
 
-Create your env file(s). **Run `cp` as its own line** (do not append `AUTH_SECRET` or other words as extra arguments):
+### Where to put secrets
 
-```bash
-cp .env.example .env.local
+| What | Where |
+|------|--------|
+| **Primary file** | **`earnings-pilot-ai/.env`** — same folder as `package.json` (create this file yourself; it is **gitignored**). |
+| **Optional overrides** | **`.env.local`** — same folder. Next.js and `npm run db:*` load **`.env` first**, then **`.env.local`**; duplicate names in **`.env.local` win**. Do **not** put empty `POLYGON_API_KEY=""` / `FINNHUB_API_KEY=""` in **`.env.local`** or they override real values in **`.env`**. |
+| **Format** | One variable per line: `NAME="value"` (use quotes for API keys). |
+| **Reload** | Restart `npm run dev` after editing env vars. |
+
+Minimal **`.env`** (keys only is fine — defaults in `lib/env.ts` supply `DATABASE_URL`, `AUTH_SECRET`, and `DATA_PROVIDER=STRICT` if omitted):
+
+```env
+POLYGON_API_KEY="your_polygon_key"
+FINNHUB_API_KEY="your_finnhub_token"
+OPENAI_API_KEY="your_openai_key"
 ```
 
-If you also keep a root `.env` (some tools only read that), either put the same `DATABASE_URL` in both files or rely on `.env.local` only: the npm scripts `db:push`, `db:seed`, and `db:studio` load **`.env` first, then `.env.local` overrides**, so Prisma matches Next.js.
-
-Default URL for the bundled Docker Postgres:
+Add when needed:
 
 ```env
 DATABASE_URL="postgresql://earnings:earnings@localhost:5432/earnings_pilot"
+AUTH_SECRET="long-random-string-min-32-chars"
+NEXTAUTH_URL="http://localhost:3000"
+DATA_PROVIDER="STRICT"
+TAVILY_API_KEY=""
+OPENAI_REASONING_MODEL="gpt-4o-mini"
+CRON_SECRET="your-cron-bearer-secret"
 ```
 
 | Variable | Purpose |
@@ -116,7 +131,7 @@ The **Redis** service in `docker-compose.yml` is provided for that pattern; it i
 
 ## 7. Live data (AUTO mode)
 
-1. Set `DATA_PROVIDER=STRICT` in `.env.local` (default in `.env.example`).
+1. Set `DATA_PROVIDER=STRICT` in `.env` (or rely on the app default).
 2. Add `POLYGON_API_KEY` (stocks + options) and `FINNHUB_API_KEY` (earnings + news; also quote fallback).
 3. Optionally add `TAVILY_API_KEY` for open-web context in the strategy engine.
 
@@ -136,13 +151,7 @@ docker compose up -d postgres
 
 ### `cp: ... is not a directory`
 
-Usually `cp` received **too many arguments** (e.g. pasted `DATABASE_URL` / `AUTH_SECRET` after the filenames). Use:
-
-```bash
-cp .env.example .env.local
-```
-
-then edit `.env.local` in an editor.
+Usually `cp` received **too many arguments**. Create **`earnings-pilot-ai/.env`** in your editor instead of copying from a template file.
 
 ### `P1001: Can't reach database server at localhost:5432`
 
