@@ -19,10 +19,10 @@ export default async function OnboardingPage() {
         <li>Schedule POST <code>/api/cron/scan</code> with <code>CRON_SECRET</code>.</li>
       </ol>
       <Link
-        href="/dashboard"
+        href="/commander"
         className="mt-10 inline-block rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-medium text-white"
       >
-        Go to dashboard
+        Open AI Portfolio Commander
       </Link>
     </div>
   );

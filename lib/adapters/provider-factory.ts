@@ -30,6 +30,7 @@ export interface DataStackSummary {
 }
 
 function label(v: string | null | undefined): string {
+  if (v === "POLYGON_WITH_FINNHUB_FALLBACK") return "POLYGON (fallback: FINNHUB)";
   return v ?? "unavailable";
 }
 

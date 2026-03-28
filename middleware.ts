@@ -11,6 +11,7 @@ export default auth((req) => {
 
 export const config = {
   matcher: [
+    "/commander/:path*",
     "/dashboard/:path*",
     "/onboarding/:path*",
     "/scanner/:path*",

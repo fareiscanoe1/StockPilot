@@ -294,20 +294,15 @@ export class StrictStrategyEngine {
 
       const candles = await market.getCandles(symbol, "1d", candleFrom, new Date());
       if (candles.length < 5) {
-        decisions.push({
-          timestamp: new Date().toISOString(),
-          ticker: symbol,
-          strategy: strategyLabel,
-          decision: "NO_TRADE",
-          reasonCode: REASON.INSUFFICIENT_CANDLE_HISTORY,
-          sourcesUsed: { ...sourcesUsed, candles: candles[0]?.source ?? quote.source },
-          sourcesMissing,
-          provenance,
+        emit?.({
+          type: "log",
+          message: `${symbol} → limited candle history (${candles.length}); continuing with quote-led fallback`,
+          symbol,
+          level: "warn",
         });
-        continue;
       }
-      sourcesUsed.candles = candles[0]!.source;
-      const closes = candles.map((c) => c.c);
+      sourcesUsed.candles = candles[0]?.source ?? quote.source;
+      const closes = candles.length ? candles.map((c) => c.c) : [quote.last];
       const technicalTrend = trendFromCandles(closes);
 
       if (quote.volume == null || quote.volume <= 0) {
@@ -805,7 +800,7 @@ export class StrictStrategyEngine {
           volume: quote.volume,
           provenance: {
             quotes: quote.source,
-            candles: candles[0]!.source,
+            candles: candles[0]?.source ?? quote.source,
             fundamentals: fundamentals?.source ?? null,
             earningsCalendar: earnings ? "FINNHUB" : null,
             news: news ? "FINNHUB" : null,

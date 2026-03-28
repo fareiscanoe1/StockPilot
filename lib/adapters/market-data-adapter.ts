@@ -261,6 +261,25 @@ export class FinnhubMarketDataAdapter implements MarketDataAdapter {
       const cj = (await cr.json()) as { s?: string; v?: number[] };
       if (cj.s === "ok" && cj.v?.length) volume = cj.v[cj.v.length - 1];
     }
+    if (volume == null || volume <= 0) {
+      const mu = `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${this.apiKey}`;
+      const mr = await fetch(mu);
+      if (mr.ok) {
+        const mj = (await mr.json()) as {
+          metric?: {
+            "10DayAverageTradingVolume"?: number;
+            "3MonthAverageTradingVolume"?: number;
+          };
+        };
+        const v10 = mj.metric?.["10DayAverageTradingVolume"];
+        const v3m = mj.metric?.["3MonthAverageTradingVolume"];
+        const raw = (v10 && v10 > 0 ? v10 : v3m) ?? 0;
+        if (raw > 0) {
+          // Finnhub averages are commonly in millions of shares.
+          volume = raw < 1_000 ? raw * 1_000_000 : raw;
+        }
+      }
+    }
 
     let bid: number | undefined;
     let ask: number | undefined;

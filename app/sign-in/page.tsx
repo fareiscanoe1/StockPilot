@@ -8,7 +8,7 @@ import { Suspense, useState } from "react";
 function SignInForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const callback = search.get("callbackUrl") ?? "/onboarding";
+  const callback = search.get("callbackUrl") ?? "/commander";
   const [email, setEmail] = useState("demo@earningspilot.ai");
   const [password, setPassword] = useState("demo-demo-demo");
   const [err, setErr] = useState<string | null>(null);

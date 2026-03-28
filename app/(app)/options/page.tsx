@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
+import prisma from "@/lib/db";
 import {
   getDataStackSummary,
   getOptionsDataAdapter,
@@ -15,10 +16,14 @@ export default async function OptionsPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/sign-in");
   const sp = await searchParams;
-  const raw = sp.symbol ?? "AAPL";
-  const symbol = raw.trim().toUpperCase() || "AAPL";
+  const fallbackWatch = await prisma.watchlistSymbol.findFirst({
+    where: { watchlist: { userId: session.user.id } },
+    orderBy: { symbol: "asc" },
+  });
+  const raw = sp.symbol ?? fallbackWatch?.symbol ?? "";
+  const symbol = raw.trim().toUpperCase();
   const adapter = getOptionsDataAdapter();
-  const chain = adapter ? await adapter.getChain(symbol) : null;
+  const chain = adapter && symbol ? await adapter.getChain(symbol) : null;
   const stack = getDataStackSummary();
 
   return (

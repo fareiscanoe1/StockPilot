@@ -1,11 +1,24 @@
 import type { OptionChain } from "./types";
 
+export interface OptionChainProbe {
+  chain: OptionChain | null;
+  httpStatus: number | null;
+  providerMessage: string | null;
+  totalContracts: number;
+  liquidContracts: number;
+}
+
 export interface OptionsDataAdapter {
   getChain(
     underlying: string,
     expiryHint?: string,
     exchange?: string,
   ): Promise<OptionChain | null>;
+  getChainProbe?(
+    underlying: string,
+    expiryHint?: string,
+    exchange?: string,
+  ): Promise<OptionChainProbe>;
 }
 
 /** Real Polygon options snapshot only — no mock chains. */
@@ -13,9 +26,30 @@ export class PolygonOptionsDataAdapter implements OptionsDataAdapter {
   constructor(private apiKey: string) {}
 
   async getChain(underlying: string): Promise<OptionChain | null> {
+    const probe = await this.getChainProbe(underlying);
+    return probe.chain;
+  }
+
+  async getChainProbe(underlying: string): Promise<OptionChainProbe> {
     const url = `https://api.polygon.io/v3/snapshot/options/${underlying}?apiKey=${this.apiKey}&limit=250`;
     const r = await fetch(url);
-    if (!r.ok) return null;
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      let providerMessage: string | null = null;
+      try {
+        const parsed = JSON.parse(text) as { message?: string; error?: string };
+        providerMessage = parsed.message ?? parsed.error ?? text.slice(0, 240);
+      } catch {
+        providerMessage = text.slice(0, 240) || null;
+      }
+      return {
+        chain: null,
+        httpStatus: r.status,
+        providerMessage,
+        totalContracts: 0,
+        liquidContracts: 0,
+      };
+    }
     const j = (await r.json()) as {
       results?: {
         details?: {
@@ -29,6 +63,7 @@ export class PolygonOptionsDataAdapter implements OptionsDataAdapter {
         last_quote?: { bid?: number; ask?: number };
       }[];
     };
+    const totalContracts = (j.results ?? []).length;
     const strikes = (j.results ?? []).flatMap((row) => {
       const d = row.details;
       const bid = row.last_quote?.bid ?? 0;
@@ -51,7 +86,21 @@ export class PolygonOptionsDataAdapter implements OptionsDataAdapter {
         },
       ];
     });
-    if (!strikes.length) return null;
-    return { underlying, asOf: new Date().toISOString(), strikes, source: "POLYGON" };
+    if (!strikes.length) {
+      return {
+        chain: null,
+        httpStatus: r.status,
+        providerMessage: "Polygon returned contracts, but none passed live bid/ask liquidity filters.",
+        totalContracts,
+        liquidContracts: 0,
+      };
+    }
+    return {
+      chain: { underlying, asOf: new Date().toISOString(), strikes, source: "POLYGON" },
+      httpStatus: r.status,
+      providerMessage: null,
+      totalContracts,
+      liquidContracts: strikes.length,
+    };
   }
 }

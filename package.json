@@ -13,7 +13,9 @@
     "db:push": "node scripts/load-env-run.mjs npx prisma db push",
     "db:seed": "node scripts/load-env-run.mjs npx tsx prisma/seed.ts",
     "db:studio": "node scripts/load-env-run.mjs npx prisma studio",
-    "worker:scan": "tsx workers/scan-runner.ts"
+    "worker:scan": "tsx workers/scan-runner.ts",
+    "worker:commander": "tsx workers/commander-operator.ts",
+    "worker:commander:tick": "tsx workers/commander-tick.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

@@ -20,6 +20,7 @@ export type ScannerSnapshot = {
   simulatedOnly: true;
   mode: StrategyMode;
   universe: string[];
+  universeSource: "explicit_symbol" | "watchlist" | "portfolio_holdings" | "none";
   portfolioValue: number;
   candidates: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["candidates"];
   stockCandidates: Awaited<ReturnType<StrictStrategyEngine["scanUniverse"]>>["stockCandidates"];
@@ -65,22 +66,52 @@ export async function executeScannerSnapshot(
   const watch = await prisma.watchlistSymbol.findMany({
     where: { watchlist: { userId } },
   });
+  const accounts = await prisma.virtualAccount.findMany({
+    where: { userId },
+    include: { holdings: true },
+  });
+
   const trimmed = symbol?.trim();
+  const watchUniverse = [...new Set(watch.map((w) => w.symbol.trim().toUpperCase()).filter(Boolean))];
+  const holdingsUniverse = [
+    ...new Set(
+      accounts.flatMap((a) => a.holdings.map((h) => h.symbol.trim().toUpperCase()).filter(Boolean)),
+    ),
+  ];
   const universe = trimmed?.length
     ? [trimmed.toUpperCase()]
-    : watch.length > 0
-      ? watch.map((w) => w.symbol)
-      : ["AAPL", "MSFT", "NVDA", "AMD", "META"];
+    : watchUniverse.length > 0
+      ? watchUniverse
+      : holdingsUniverse;
+  const universeSource: ScannerSnapshot["universeSource"] = trimmed?.length
+    ? "explicit_symbol"
+    : watchUniverse.length > 0
+      ? "watchlist"
+      : holdingsUniverse.length > 0
+        ? "portfolio_holdings"
+        : "none";
 
-  const acc = await prisma.virtualAccount.findFirst({ where: { userId } });
+  if (!universe.length) {
+    telemetry?.({
+      type: "log",
+      level: "warn",
+      message:
+        "No symbols configured for scanning (watchlist and holdings are empty). Add symbols to watchlist or pass ?symbol=XYZ.",
+    });
+  }
+
   const marks: Record<string, number> = {};
+  const markSymbols = [...new Set([...universe, ...holdingsUniverse])];
   if (providers.market) {
-    for (const s of universe) {
+    for (const s of markSymbols) {
       const q = await providers.market.getQuote(s);
       if (q) marks[s] = q.last;
     }
   }
-  const pv = acc ? await PortfolioSimulator.portfolioValue(acc.id, marks) : 100_000;
+  let pv = 0;
+  for (const acc of accounts) {
+    pv += await PortfolioSimulator.portfolioValue(acc.id, marks);
+  }
 
   telemetry?.({
     type: "scan_begin",
@@ -103,7 +134,7 @@ export async function executeScannerSnapshot(
   } = await engine.scanUniverse(
     universe,
     pv,
-    acc?.subPortfolio ?? "SWING",
+    accounts[0]?.subPortfolio ?? "SWING",
     telemetry,
   );
 
@@ -124,6 +155,7 @@ export async function executeScannerSnapshot(
     simulatedOnly: true as const,
     mode,
     universe,
+    universeSource,
     portfolioValue: pv,
     candidates,
     stockCandidates,

@@ -22,21 +22,31 @@ export class ScanRunner {
       where: { userId },
     });
 
-    const accounts = await prisma.virtualAccount.findMany({ where: { userId } });
+    const accounts = await prisma.virtualAccount.findMany({
+      where: { userId },
+      include: { holdings: true },
+    });
     const watch = await prisma.watchlistSymbol.findMany({
       where: { watchlist: { userId } },
     });
     const symbols = [...new Set(watch.map((w) => w.symbol))];
-    const universe =
-      symbols.length > 0
-        ? symbols
-        : ["AAPL", "MSFT", "NVDA", "AMD", "META", "SHOP.TO"];
+    const holdingSymbols = [
+      ...new Set(accounts.flatMap((a) => a.holdings.map((h) => h.symbol))),
+    ];
+    const universe = symbols.length > 0 ? symbols : holdingSymbols;
 
     if (providers.stack.warnings.length) {
       console.warn(
         "[STRICT] Provider warnings:",
         providers.stack.warnings.join(" | "),
       );
+    }
+    if (!universe.length) {
+      console.warn(
+        "[STRICT] ScanRunner: no watchlist/holding symbols configured; skipping scan cycle for user",
+        userId,
+      );
+      return;
     }
     if (!providers.market) {
       console.warn(
@@ -46,17 +56,15 @@ export class ScanRunner {
 
     for (const acc of accounts) {
       const marks: Record<string, number> = {};
+      const markSymbols = [...new Set([...universe, ...acc.holdings.map((h) => h.symbol)])];
       if (providers.market) {
-        for (const s of universe) {
+        for (const s of markSymbols) {
           const q = await providers.market.getQuote(s);
           if (q) marks[s] = q.last;
         }
       }
       const pv = await PortfolioSimulator.portfolioValue(acc.id, marks);
-      const holdings = await prisma.holding.findMany({
-        where: { virtualAccountId: acc.id },
-      });
-      const gross = holdings.reduce(
+      const gross = acc.holdings.reduce(
         (s, h) => s + Number(h.quantity) * (marks[h.symbol] ?? Number(h.avgCost)),
         0,
       );

@@ -31,6 +31,9 @@ model User {
   backtestRuns         BacktestRun[]
   auditLogs            AuditLog[]
   notificationPrefs    NotificationPreference?
+  commanderDeskState   CommanderDeskState?
+  commanderScanRuns    CommanderScanRun[]
+  commanderCommentary  CommanderCommentary[]
 }
 
 model NotificationPreference {
@@ -155,6 +158,26 @@ enum NotificationChannel {
   DISCORD
   SMS
   WEB_PUSH
+}
+
+enum CommanderCommentaryKind {
+  SYSTEM
+  STRATEGY_SHIFT
+  COMMAND_RUN
+  RISK_ALERT
+}
+
+enum CommanderRunStatus {
+  COMPLETED
+  ERROR
+}
+
+enum CommanderWorkerStatus {
+  IDLE
+  RUNNING
+  WAITING
+  DEGRADED
+  ERROR
 }
 
 model VirtualAccount {
@@ -395,6 +418,82 @@ model NewsItem {
   createdAt   DateTime  @default(now())
 
   @@index([symbol, publishedAt])
+}
+
+model CommanderDeskState {
+  id                 String               @id @default(cuid())
+  userId             String               @unique
+  cadenceMinutes     Int                  @default(3)
+  workerStatus       CommanderWorkerStatus @default(IDLE)
+  lastHeartbeatAt    DateTime?
+  lastScanStartedAt  DateTime?
+  lastScanCompletedAt DateTime?
+  nextScheduledScanAt DateTime?
+  scanInProgress     Boolean              @default(false)
+  lastError          String?              @db.Text
+  lastBestIdeaSymbol String?
+  lastStrongestCategory String?
+  lastRiskSummary    String?              @db.Text
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workerStatus, nextScheduledScanAt])
+}
+
+model CommanderWorkerHeartbeat {
+  /// Keep a singleton row with workerName = "commander"
+  workerName        String                @id
+  status            CommanderWorkerStatus @default(IDLE)
+  lastHeartbeatAt   DateTime              @default(now())
+  lastRunStartedAt  DateTime?
+  lastRunCompletedAt DateTime?
+  lastError         String?               @db.Text
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+}
+
+model CommanderScanRun {
+  id                 String             @id @default(cuid())
+  userId             String
+  status             CommanderRunStatus @default(COMPLETED)
+  startedAt          DateTime
+  completedAt        DateTime
+  bestIdeaSymbol     String?
+  bestIdeaCategory   String?
+  strongestCategory  String?
+  topRisks           Json?
+  opportunitiesCount Int                @default(0)
+  openAiCalls        Int                @default(0)
+  whatChanged        String?            @db.Text
+  summaryText        String?            @db.Text
+  providerHealth     Json?
+  scanMeta           Json?
+  digest             Json?
+  createdAt          DateTime           @default(now())
+
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  commentary CommanderCommentary[]
+
+  @@index([userId, createdAt])
+}
+
+model CommanderCommentary {
+  id          String                 @id @default(cuid())
+  userId      String
+  scanRunId   String?
+  kind        CommanderCommentaryKind @default(SYSTEM)
+  eventType   String
+  message     String                 @db.Text
+  payload     Json?
+  createdAt   DateTime               @default(now())
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scanRun CommanderScanRun? @relation(fields: [scanRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([kind, createdAt])
 }
 
 model BacktestRun {

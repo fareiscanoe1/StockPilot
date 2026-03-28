@@ -13,8 +13,8 @@ export class FinnhubEarningsDataAdapter implements EarningsDataAdapter {
     const to = new Date(from.getTime() + days * 86400000);
     const fromStr = from.toISOString().slice(0, 10);
     const toStr = to.toISOString().slice(0, 10);
-    const syms =
-      symbols?.length ? symbols : ["AAPL", "MSFT", "NVDA", "META", "AMD"];
+    const syms = symbols?.length ? symbols : [];
+    if (!syms.length) return [];
     const merged: EarningsRow[] = [];
     const seen = new Set<string>();
     for (const sym of syms) {

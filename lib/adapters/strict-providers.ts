@@ -13,7 +13,7 @@ import { FinnhubEarningsDataAdapter, type EarningsDataAdapter } from "./earnings
 import { FinnhubLiveNewsAdapter, type NewsAdapter } from "./news-adapter";
 import { SkippedWebResearchAdapter, TavilyResearchAdapter, type ResearchAdapter } from "./research-adapter";
 
-export type QuotesSource = "POLYGON" | "FINNHUB" | null;
+export type QuotesSource = "POLYGON" | "POLYGON_WITH_FINNHUB_FALLBACK" | "FINNHUB" | null;
 export type OptionsSource = "POLYGON" | null;
 export type EarningsSource = "FINNHUB" | null;
 export type NewsSource = "FINNHUB" | null;
@@ -59,7 +59,7 @@ export function resolveStrictProviders(): ResolvedStrictProviders {
       new PolygonMarketDataAdapter(env.POLYGON_API_KEY),
       new FinnhubMarketDataAdapter(env.FINNHUB_API_KEY),
     );
-    quotesSource = "POLYGON";
+    quotesSource = "POLYGON_WITH_FINNHUB_FALLBACK";
   } else if (env.POLYGON_API_KEY) {
     market = new PolygonMarketDataAdapter(env.POLYGON_API_KEY);
     quotesSource = "POLYGON";

@@ -13,6 +13,7 @@ import type {
 } from "@/lib/adapters/types";
 import type { SymbolResearchContext } from "@/lib/adapters/research-adapter";
 import type { RiskParams } from "./risk-params";
+import { logOpenAiError, summarizeOpenAiError } from "@/lib/openai/error-detail";
 
 const openAiReasoningOutputSchema = z
   .object({
@@ -355,7 +356,7 @@ export async function runOpenAIReasoning(
       rawContent: content,
     };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg };
+    const detail = logOpenAiError("strategy.reasoning", e);
+    return { ok: false, error: summarizeOpenAiError(detail) };
   }
 }
