@@ -1,8 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #070b12;
+  --foreground: #e8edf7;
+  --muted: #8b95ab;
+  --card: #0f1624;
+  --border: #1e2a42;
+  --accent: #3d8bfd;
+  --accent-dim: #1f3b66;
+  --gain: #34d399;
+  --loss: #f87171;
+  --warn: #fbbf24;
 }
 
 @theme inline {
@@ -12,15 +20,32 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
+  background: radial-gradient(1200px 600px at 20% -10%, #152042 0%, transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, #1a2f28 0%, transparent 55%),
+    var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+.card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 40%),
+    var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.pill-sim {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
 }

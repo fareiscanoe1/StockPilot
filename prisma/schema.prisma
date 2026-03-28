@@ -1,0 +1,396 @@
+// Earnings Pilot AI — paper trading only. Schema for virtual portfolios and audit trails.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// —– Auth (NextAuth / Auth.js compatible) —–
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+
+  accounts        Account[]
+  sessions        Session[]
+  virtualAccounts VirtualAccount[]
+  strategyProfile StrategyProfile?
+  watchlists      Watchlist[]
+  alerts          Alert[]
+  notifications   Notification[]
+  recommendations RecommendationLog[]
+  backtestRuns         BacktestRun[]
+  auditLogs            AuditLog[]
+  notificationPrefs    NotificationPreference?
+}
+
+model NotificationPreference {
+  id                 String  @id @default(cuid())
+  userId             String  @unique
+  inAppEnabled       Boolean @default(true)
+  emailEnabled       Boolean @default(false)
+  telegramEnabled    Boolean @default(false)
+  telegramChatId     String?
+  discordEnabled     Boolean @default(false)
+  discordWebhookUrl  String?
+  smsEnabled         Boolean @default(false)
+  /// Provider-specific “to” field; tokens belong in env — see README
+  smsTo              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// —– Domain —–
+
+enum SubPortfolioType {
+  LONG_TERM
+  SWING
+  EARNINGS
+  OPTIONS
+}
+
+enum StrategyMode {
+  AGGRESSIVE
+  BALANCED
+  DEFENSIVE
+  EARNINGS_HUNTER
+  OPTIONS_MOMENTUM
+  CUSTOM
+}
+
+enum AssetType {
+  STOCK
+  OPTION
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  PENDING
+  FILLED
+  CANCELLED
+  REJECTED
+}
+
+enum RecommendationDecision {
+  TRADE
+  NO_TRADE
+}
+
+enum SimulatedAction {
+  BUY
+  SELL
+  TRIM
+  ADD
+  CLOSE
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  TELEGRAM
+  DISCORD
+  SMS
+  WEB_PUSH
+}
+
+model VirtualAccount {
+  id               String           @id @default(cuid())
+  userId           String
+  name             String
+  subPortfolio     SubPortfolioType @default(SWING)
+  startingCash     Decimal          @db.Decimal(20, 4)
+  cashBalance      Decimal          @db.Decimal(20, 4)
+  currency         String           @default("USD")
+  dailyPnl         Decimal          @default(0) @db.Decimal(20, 4)
+  realizedPnl      Decimal          @default(0) @db.Decimal(20, 4)
+  maxDrawdownPct   Decimal?         @db.Decimal(10, 4)
+  isLockedDaily    Boolean          @default(false)
+  isLockedWeekly   Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holdings  Holding[]
+  orders    SimulatedOrder[]
+  fills     SimulatedFill[]
+  recLogs   RecommendationLog[]
+
+  @@index([userId])
+}
+
+model StrategyProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  mode   StrategyMode @default(BALANCED)
+  /// JSON: custom rule DSL / weights overrides
+  customRules Json?
+  /// JSON: RiskEngine parameters
+  riskParams  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Watchlist {
+  id     String @id @default(cuid())
+  userId String
+  name   String
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbols WatchlistSymbol[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model WatchlistSymbol {
+  id          String @id @default(cuid())
+  watchlistId String
+  symbol      String
+  exchange    String @default("US")
+
+  watchlist Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+
+  @@unique([watchlistId, symbol, exchange])
+}
+
+model OptionContract {
+  id         String   @id @default(cuid())
+  occSymbol  String   @unique
+  underlying String
+  strike     Decimal  @db.Decimal(20, 4)
+  expiry     DateTime
+  right      String // C | P
+  multiplier Int      @default(100)
+
+  holdings Holding[]
+  fills    SimulatedFill[]
+}
+
+model Holding {
+  id                 String    @id @default(cuid())
+  virtualAccountId   String
+  symbol             String
+  assetType          AssetType
+  quantity           Decimal   @db.Decimal(20, 8)
+  avgCost            Decimal   @db.Decimal(20, 8)
+  optionContractId   String?
+  sector             String?
+  openedAt           DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  virtualAccount VirtualAccount  @relation(fields: [virtualAccountId], references: [id], onDelete: Cascade)
+  optionContract OptionContract? @relation(fields: [optionContractId], references: [id])
+
+  @@index([virtualAccountId])
+  @@index([symbol])
+}
+
+model SimulatedOrder {
+  id               String      @id @default(cuid())
+  virtualAccountId String
+  symbol           String
+  assetType        AssetType
+  action           SimulatedAction
+  side             OrderSide
+  quantity         Decimal     @db.Decimal(20, 8)
+  limitPrice       Decimal?    @db.Decimal(20, 8)
+  status           OrderStatus @default(PENDING)
+  strategyTag      String?
+  isEarningsPlay   Boolean     @default(false)
+  clientNote       String?     @db.Text
+  createdAt        DateTime    @default(now())
+
+  virtualAccount VirtualAccount @relation(fields: [virtualAccountId], references: [id], onDelete: Cascade)
+  fills          SimulatedFill[]
+
+  @@index([virtualAccountId, createdAt])
+}
+
+model SimulatedFill {
+  id               String   @id @default(cuid())
+  virtualAccountId String
+  orderId          String
+  price            Decimal  @db.Decimal(20, 8)
+  quantity         Decimal  @db.Decimal(20, 8)
+  fees             Decimal  @default(0) @db.Decimal(20, 8)
+  filledAt         DateTime @default(now())
+  optionContractId String?
+
+  virtualAccount VirtualAccount  @relation(fields: [virtualAccountId], references: [id], onDelete: Cascade)
+  order          SimulatedOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  optionContract OptionContract? @relation(fields: [optionContractId], references: [id])
+
+  @@index([orderId])
+}
+
+model Alert {
+  id        String        @id @default(cuid())
+  userId    String
+  title     String
+  body      String        @db.Text
+  severity  AlertSeverity @default(INFO)
+  payload   Json?
+  read      Boolean       @default(false)
+  createdAt DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String
+  channel   NotificationChannel
+  title     String
+  body      String              @db.Text
+  status    String              @default("QUEUED") // QUEUED, SENT, FAILED
+  meta      Json?
+  createdAt DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model RecommendationLog {
+  id               String  @id @default(cuid())
+  userId           String
+  virtualAccountId String?
+  ticker           String
+  assetType        AssetType
+  decision         RecommendationDecision @default(NO_TRADE)
+  reasonCode       String?
+  /// Exact vendor / layer names used for this decision (e.g. quotes: POLYGON)
+  sourcesUsed      Json?
+  sourcesMissing   Json?
+  /// "facts" vs "inference" separated in JSON for transparency
+  decisionPayload  Json
+  confidence       Decimal @db.Decimal(4, 2)
+  riskScore        Decimal @db.Decimal(4, 2)
+  tradeAllowed     Boolean
+  createdAt        DateTime @default(now())
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  virtualAccount VirtualAccount? @relation(fields: [virtualAccountId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([decision, createdAt])
+}
+
+model EarningsEvent {
+  id           String    @id @default(cuid())
+  symbol       String
+  exchange     String    @default("US")
+  companyName  String?
+  datetimeUtc  DateTime?
+  fiscalDate   DateTime?
+  /// Vendor label for how the row was ingested (e.g. FINNHUB, SEED)
+  dataSource   String
+  epsEstimate  Decimal?  @db.Decimal(20, 8)
+  revenueEst   Decimal?  @db.Decimal(20, 4)
+  surprise     Decimal?  @db.Decimal(20, 8)
+  createdAt    DateTime  @default(now())
+
+  @@index([symbol, datetimeUtc])
+}
+
+model NewsItem {
+  id          String    @id @default(cuid())
+  symbol      String?
+  headline    String
+  url         String?
+  source      String
+  sentiment   Decimal?  @db.Decimal(5, 4)
+  publishedAt DateTime?
+  dataSource  String
+  createdAt   DateTime  @default(now())
+
+  @@index([symbol, publishedAt])
+}
+
+model BacktestRun {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  params      Json
+  result      Json?
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+}
